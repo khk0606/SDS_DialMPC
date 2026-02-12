@@ -1,6 +1,4 @@
-## Key files (paths)
-## System Architecture
-
+## Key files (pat
 See → VLM extracts gait / velocity / contacts  
 Do → Reward function generated automatically  
 Sorted → Dial-MPC executes control
@@ -14,7 +12,6 @@ flowchart LR
     C --> D[Dial-MPC Optimization]
     D --> E[Robot Control]
 ```
-
 ## Key files (paths)
 
 - Environment: [`dial-mpc/dial_mpc/envs/unitree_go2_env.py`](dial-mpc/dial_mpc/envs/unitree_go2_env.py)
