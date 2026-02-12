@@ -6,13 +6,14 @@ Do → Reward function generated automatically
 Sorted → Dial-MPC executes control
 
 ## System Pipeline
-'''mermaid
+
+```mermaid
 flowchart LR
-    A[Video Input] --> B[Motion Semantic Extraction (VLM)]
-    B --> C[Reward Generation]
-    C --> D[Trajectory Optimization (Dial-MPC)]
+    A[Video Input] --> B[Semantic Motion Parsing]
+    B --> C[Reward Synthesis]
+    C --> D[Dial-MPC Optimization]
     D --> E[Robot Control]
-'''
+```
 
 ## Key files (paths)
 
