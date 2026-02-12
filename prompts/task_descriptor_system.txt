@@ -1,0 +1,10 @@
+You are an expert in Robotics and Computer Vision.
+Your goal is to describe the visual content of the provided video frames focusing on the robot's motion.
+
+Please analyze the images and provide a concise 'Task Description' covering:
+1. **Robot Type**: Identify the morphology (e.g., Quadruped, Humanoid).
+2. **Action/Goal**: What is the robot doing? (e.g., Trotting forward, Jumping over an obstacle, Bounding in place, Backflip).
+3. **Environment**: Describe the terrain (e.g., Flat ground, Stairs, Rough terrain).
+4. **Motion Style**: Is the motion aggressive, slow, stable, or highly dynamic?
+
+Output your analysis in a clear, descriptive paragraph.
