@@ -1,15 +1,10 @@
 import requests
 import json
-
-import time
 import os
+import time
 
-API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is not set")
 # [중요] 여기에 본인의 API 키를 입력하세요
-
+API_KEY = "AIzaSyBjtl4NJlMbsEm1JNV3zw5H8ZE6_jybeGs" 
 
 class Agent():
     def __init__(self, system_prompt_path, cfg):
@@ -62,7 +57,7 @@ class Agent():
         payload = {
             "contents": self.history,
             "generationConfig": {
-                "temperature": 0.7,
+                "temperature": 0.2,
                 "maxOutputTokens": 4096
             }
         }
@@ -95,7 +90,7 @@ class Agent():
 # --- 하위 클래스 (기존 유지) ---
 
 class TaskDescriptor(Agent):
-    def __init__(self, cfg, prompt_dir="prompts"):
+    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
         super().__init__(f"{prompt_dir}/task_descriptor_system.txt", cfg)
     
     def analyse(self, encoded_frame_grid):
@@ -103,7 +98,7 @@ class TaskDescriptor(Agent):
         return self.query()
 
 class ContactSequenceAnalyser(Agent):
-    def __init__(self, cfg, prompt_dir="prompts"):
+    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
         super().__init__(f"{prompt_dir}/contact_sequence_system.txt", cfg)
         
     def analyse(self, encoded_frame_grid):
@@ -116,7 +111,7 @@ class ContactSequenceAnalyser(Agent):
         return self.query() # 2차 검증
 
 class TaskRequirementAnalyser(Agent):
-    def __init__(self, cfg, prompt_dir="prompts"):
+    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
         super().__init__(f"{prompt_dir}/task_requirement_system.txt", cfg)
         
     def analyse(self, encoded_frame_grid):
@@ -124,7 +119,7 @@ class TaskRequirementAnalyser(Agent):
         return self.query()
 
 class GaitAnalyser(Agent):
-    def __init__(self, cfg, prompt_dir="prompts"):
+    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
         super().__init__(f"{prompt_dir}/gait_pattern_system.txt", cfg)
         
     def analyse(self, encoded_frame_grid, contact_pattern):
@@ -135,7 +130,7 @@ class GaitAnalyser(Agent):
         return self.query()
 
 class SUSGenerator(Agent):
-    def __init__(self, cfg, prompt_dir="prompts"):
+    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
         super().__init__(f"{prompt_dir}/SUS_generation_prompt.txt", cfg)
         self.cfg = cfg
         self.prompt_dir = prompt_dir

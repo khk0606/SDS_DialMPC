@@ -1,41 +1,34 @@
 import os
-from dataclasses import dataclass
 import time
 from multiprocessing import shared_memory
 import importlib
 import sys
+import argparse
 
 import yaml
-import argparse
 import numpy as np
-from tqdm import tqdm
 import art
 
-import functools
-from functools import partial
 import jax
 from jax import numpy as jnp
 from mujoco import mjx
 
 import brax.envs as brax_envs
-from brax.envs.base import Env as BraxEnv
-from brax.envs.base import State
 from brax.mjx.base import State as MjxState
 from brax.mjx.pipeline import _reformat_contact
 from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
-from brax.base import Contact, Motion, System, Transform
+from brax.base import Motion, System, Transform
 
 import dial_mpc.envs as dial_envs
 from dial_mpc.core.dial_core import DialConfig, MBDPI
 from dial_mpc.envs.base_env import BaseEnv, BaseEnvConfig
 from dial_mpc.utils.io_utils import (
     load_dataclass_from_dict,
-    get_model_path,
     get_example_path,
 )
 from dial_mpc.examples import deploy_examples
 
-# Tell XLA to use Triton GEMM, this improves steps/sec by ~30% on some GPUs
+
 xla_flags = os.environ.get("XLA_FLAGS", "")
 xla_flags += " --xla_gpu_triton_gemm_any=True"
 os.environ["XLA_FLAGS"] = xla_flags
@@ -61,10 +54,7 @@ def pipeline_init(
 
 
 class MBDPublisher:
-    def __init__(
-        self, env: BaseEnv, env_config: BaseEnvConfig, dial_config: DialConfig
-    ):
-        # MBD related
+    def __init__(self, env: BaseEnv, env_config: BaseEnvConfig, dial_config: DialConfig):
         self.dial_config = dial_config
         self.env = env
         self.env_config = env_config
@@ -74,33 +64,27 @@ class MBDPublisher:
         self.pipeline_init_jit = jax.jit(pipeline_init)
         self.shift_vmap = jax.jit(jax.vmap(self.shift, in_axes=(1, None), out_axes=1))
 
-        # control parameters
         self.Y = jnp.zeros([self.dial_config.Hnode + 1, self.mbdpi.nu])
         self.ctrl_dt = env_config.dt
 
-        # parameters
-        self.timer_period = env_config.dt  # seconds
-        self.n_acts = self.dial_config.Hsample + 1  # action buffer size
+        self.n_acts = self.dial_config.Hsample + 1
         self.nx = self.env.sys.mj_model.nq + self.env.sys.mj_model.nv
         self.nu = self.env.sys.mj_model.nu
         self.default_q = self.env.sys.mj_model.keyframe("home").qpos
-        self.default_u = self.env.sys.mj_model.keyframe("home").ctrl
 
-        # --------- Warm-start / jump mitigation settings ----------
-        # 0) Startup hold duration (seconds)
-        self.startup_hold_sec = 1.5
+        # warm-start / anti-spike
+        self.startup_hold_sec = 1.2
         self._startup_t0 = None
-
-        # 1) Warmup blending duration (seconds)
-        self.warmup_sec = 5.0  # 안정화 강화를 위해 5초
+        self.warmup_sec = 2.0
         self._warmup_t0 = None
-        self._q_home = jnp.array(self.default_q[7:7 + self.nu])
 
-        # 2) Optional per-step joint target clamp (rad)
+        self._q_home = jnp.array(self.default_q[7:7 + self.nu])
         self.enable_joint_clamp = True
-        self.max_joint_delta = 0.02  # 더 강하게 제한
+        self.max_joint_delta = 0.08
+        self.max_seq_delta = 0.06
         self._jt_prev = jnp.array(self.default_q[7:7 + self.nu])
-        # ----------------------------------------------------------
+
+        self._debug_counter = 0
 
         # publisher
         self.acts_shm = shared_memory.SharedMemory(
@@ -115,33 +99,25 @@ class MBDPublisher:
             name="refs_shm", create=False, size=self.n_acts * self.env.sys.nu * 3 * 32
         )
         self.refs_shared = np.ndarray(
-            (self.n_acts, self.env.sys.nu, 3),
-            dtype=np.float32,
-            buffer=self.refs_shm.buf,
+            (self.n_acts, self.env.sys.nu, 3), dtype=np.float32, buffer=self.refs_shm.buf
         )
         self.refs_shared[:] = 1.0
 
         self.plan_time_shm = shared_memory.SharedMemory(
             name="plan_time_shm", create=False, size=32
         )
-        self.plan_time_shared = np.ndarray(
-            1, dtype=np.float32, buffer=self.plan_time_shm.buf
-        )
+        self.plan_time_shared = np.ndarray(1, dtype=np.float32, buffer=self.plan_time_shm.buf)
         self.plan_time_shared[0] = -0.02
 
-        # listerner
-        self.time_shm = shared_memory.SharedMemory(
-            name="time_shm", create=False, size=32
-        )
+        # listener
+        self.time_shm = shared_memory.SharedMemory(name="time_shm", create=False, size=32)
         self.time_shared = np.ndarray(1, dtype=np.float32, buffer=self.time_shm.buf)
         self.time_shared[0] = 0.0
 
         self.state_shm = shared_memory.SharedMemory(
             name="state_shm", create=False, size=self.nx * 32
         )
-        self.state_shared = np.ndarray(
-            (self.nx,), dtype=np.float32, buffer=self.state_shm.buf
-        )
+        self.state_shared = np.ndarray((self.nx,), dtype=np.float32, buffer=self.state_shm.buf)
         self.state_shared[: self.default_q.shape[0]] = self.default_q
 
         self.tau_shm = shared_memory.SharedMemory(
@@ -153,23 +129,24 @@ class MBDPublisher:
 
     def shift(self, x, shift_time):
         spline = InterpolatedUnivariateSpline(self.mbdpi.step_nodes, x, k=2)
-        x_new = spline(self.mbdpi.step_nodes + shift_time)
-        return x_new
+        return spline(self.mbdpi.step_nodes + shift_time)
 
     def init_mjx_state(self, q, qd, t):
+        q = jnp.array(q)
+        qd = jnp.array(qd)
         state = self.env.reset(jax.random.PRNGKey(0))
         pipeline_state = self.pipeline_init_jit(self.env.sys, q, qd)
         obs = self.env._get_obs(pipeline_state, state.info)
-        state = state.replace(pipeline_state=pipeline_state, obs=obs)
-        return state
+        return state.replace(pipeline_state=pipeline_state, obs=obs)
 
     def update_mjx_state(self, state, q, qd, t):
+        q = jnp.array(q)
+        qd = jnp.array(qd)
         pipeline_state = state.pipeline_state.replace(qpos=q, qvel=qd)
         step = int(t / self.ctrl_dt)
         info = state.info
         info["step"] = step
-        state = state.replace(pipeline_state=pipeline_state, info=info)
-        return state
+        return state.replace(pipeline_state=pipeline_state, info=info)
 
     def _in_startup_hold(self) -> bool:
         if self.startup_hold_sec <= 1e-6:
@@ -180,44 +157,88 @@ class MBDPublisher:
         return (time.time() - self._startup_t0) < self.startup_hold_sec
 
     def _compute_alpha(self) -> float:
-        """Warmup blending factor alpha in [0,1]."""
         if self._warmup_t0 is None:
             self._warmup_t0 = time.time()
             return 0.0
         elapsed = time.time() - self._warmup_t0
         if self.warmup_sec <= 1e-6:
             return 1.0
-        alpha = elapsed / self.warmup_sec
-        if alpha < 0.0:
-            alpha = 0.0
-        if alpha > 1.0:
-            alpha = 1.0
-        return float(alpha)
+        return float(max(0.0, min(1.0, elapsed / self.warmup_sec)))
 
     def _warmstart_blend_jt0(self, jt0: jax.Array, alpha: float) -> jax.Array:
-        """Blend first-step joint target from home pose to MPC target."""
-        if self._q_home is None:
-            # home target should match jt0 shape (nu,)
-            self._q_home = jnp.array(jt0)
         return (1.0 - alpha) * self._q_home + alpha * jt0
 
     def _clamp_jt0(self, jt0: jax.Array) -> jax.Array:
-        """Clamp per-step joint target change to avoid impulsive jumps."""
         if not self.enable_joint_clamp:
             return jt0
-
-        if self._jt_prev is None:
-            self._jt_prev = jnp.array(jt0)
-            return jt0
-
         delta = jt0 - self._jt_prev
         delta = jnp.clip(delta, -self.max_joint_delta, self.max_joint_delta)
-        jt0_clamped = self._jt_prev + delta
-        self._jt_prev = jt0_clamped
-        return jt0_clamped
+        out = self._jt_prev + delta
+        self._jt_prev = out
+        return out
+
+    def _clamp_seq_delta(self, jt_seq: jax.Array, max_step: float) -> jax.Array:
+        if jt_seq.shape[0] <= 1:
+            return jt_seq
+
+        def _one(prev, curr):
+            d = jnp.clip(curr - prev, -max_step, max_step)
+            out = prev + d
+            return out, out
+
+        first = jt_seq[0]
+        _, rest = jax.lax.scan(_one, first, jt_seq[1:])
+        return jnp.concatenate([first[None, :], rest], axis=0)
+
+    def _to_joint_seq(self, joint_targets: jax.Array) -> jax.Array:
+        jt = joint_targets
+        if not hasattr(jt, "ndim"):
+            jt = jnp.array(jt)
+
+        if jt.ndim == 1:
+            seq = jnp.tile(jt[None, :], (self.n_acts, 1))
+        elif jt.ndim == 2:
+            if jt.shape[1] == self.nu:
+                seq = jt
+            elif jt.shape[0] == self.nu:
+                seq = jt.T
+            else:
+                seq = jnp.tile(self._q_home[None, :], (self.n_acts, 1))
+        elif jt.ndim == 3:
+            cand = jt[0]
+            if cand.ndim == 2 and cand.shape[1] == self.nu:
+                seq = cand
+            elif cand.ndim == 2 and cand.shape[0] == self.nu:
+                seq = cand.T
+            else:
+                flat = cand.reshape(-1, cand.shape[-1])
+                if flat.shape[1] == self.nu:
+                    seq = flat
+                elif flat.shape[0] == self.nu:
+                    seq = flat.T
+                else:
+                    seq = jnp.tile(self._q_home[None, :], (self.n_acts, 1))
+        else:
+            seq = jnp.tile(self._q_home[None, :], (self.n_acts, 1))
+
+        h = seq.shape[0]
+        if h < self.n_acts:
+            seq = jnp.concatenate([seq, jnp.repeat(seq[-1:, :], self.n_acts - h, axis=0)], axis=0)
+        elif h > self.n_acts:
+            seq = seq[: self.n_acts, :]
+        return seq
+
+    def _first_u(self, us: jax.Array) -> jax.Array:
+        if not hasattr(us, "ndim"):
+            return us
+        if us.ndim == 1:
+            return us
+        if us.ndim == 2:
+            return us[:, 0] if us.shape[0] == self.nu else us[0, :]
+        # ndim == 3
+        return us[0, :, 0] if us.shape[1] == self.nu else us[0, 0, :]
 
     def main_loop(self):
-
         def reverse_scan(rng_Y0_state, factor):
             rng, Y0, state = rng_Y0_state
             rng, Y0, info = self.mbdpi.reverse_once(state, rng, Y0, factor)
@@ -234,7 +255,6 @@ class MBDPublisher:
         while True:
             t0 = time.time()
 
-            # get state
             plan_time = self.time_shared[0]
             state = self.update_mjx_state(
                 state,
@@ -243,138 +263,89 @@ class MBDPublisher:
                 plan_time,
             )
 
-            # shift Y
             shift_time = plan_time - last_plan_time
             if shift_time > self.ctrl_dt + 1e-3:
-                print(f"[WRAN] sim overtime {(shift_time-self.ctrl_dt)*1000:.1f} ms")
+                print(f"[WARN] sim overtime {(shift_time - self.ctrl_dt) * 1000:.1f} ms")
             if shift_time > self.ctrl_dt * self.n_acts:
-                print(
-                    f"[WARN] long time unplanned {shift_time*1000:.1f} ms, reset control"
-                )
+                print(f"[WARN] long time unplanned {shift_time * 1000:.1f} ms, reset control")
                 self.Y = self.Y * 0.0
             else:
                 self.Y = self.shift_vmap(self.Y, shift_time)
 
-            # run planner
             n_diffuse = self.dial_config.Ndiffuse
             if first_time:
                 print("Performing JIT on DIAL-MPC")
                 n_diffuse = self.dial_config.Ndiffuse_init
                 first_time = False
-                traj_diffuse_factors = (
-                    self.dial_config.traj_diffuse_factor
-                    ** (jnp.arange(n_diffuse))[:, None]
-                )
+                factors = self.dial_config.traj_diffuse_factor ** (jnp.arange(n_diffuse))[:, None]
                 (self.rng, self.Y, _), info = jax.lax.scan(
-                    reverse_scan, (self.rng, self.Y, state), traj_diffuse_factors
+                    reverse_scan, (self.rng, self.Y, state), factors
                 )
-                n_diffuse = self.dial_config.Ndiffuse
 
-            traj_diffuse_factors = (
-                self.dial_config.traj_diffuse_factor ** (jnp.arange(n_diffuse))[:, None]
-            )
+            factors = self.dial_config.traj_diffuse_factor ** (jnp.arange(self.dial_config.Ndiffuse))[:, None]
             (self.rng, self.Y, _), info = jax.lax.scan(
-                reverse_scan, (self.rng, self.Y, state), traj_diffuse_factors
+                reverse_scan, (self.rng, self.Y, state), factors
             )
 
-            # use position control
-            actual_joint_targets = info["qbar"][:, 7:]
             x_targets = info["xbar"][-1, :, 1:, :3]
 
-            # convert plan to control (sequence over horizon)
             us = self.mbdpi.node2u_vmap(self.Y)
+            us0 = self._first_u(us)
 
-            us0 = us
-            if hasattr(us, "ndim"):
-                if us.ndim == 2:
-                    # (H, nu) or (nu, H) -> (nu,)
-                    if us.shape[0] == self.env.sys.nu:
-                        us0 = us[:, 0]      # (nu, H)
-                    else:
-                        us0 = us[0, :]      # (H, nu)
-                elif us.ndim == 3:
-                    # common case: (n_acts, nu, H) or (n_acts, H, nu)
-                    if us.shape[1] == self.env.sys.nu:
-                        us0 = us[0, :, 0]   # (n_acts, nu, H)
-                    else:
-                        us0 = us[0, 0, :]   # (n_acts, H, nu) -> (nu,)
-
-            # unnormalize control
             joint_targets = self.env.act2joint(us)
+            jt_seq = self._to_joint_seq(joint_targets)
 
-            # Pick the first joint target in the horizon for position control.
-            jt0 = joint_targets
-            if hasattr(joint_targets, "ndim") and joint_targets.ndim == 2:
-                # expected: (H, nu) or (nu, H)
-                if joint_targets.shape[0] == self.env.sys.nu:
-                    jt0 = joint_targets[:, 0]   # (nu, H) -> (nu,)
-                else:
-                    jt0 = joint_targets[0, :]   # (H, nu) -> (nu,)
-            elif hasattr(joint_targets, "ndim") and joint_targets.ndim == 3:
-                # sometimes (n_acts, H, nu) or (n_acts, nu, H)
-                if joint_targets.shape[1] == self.env.sys.nu:
-                    jt0 = joint_targets[0, :, 0]
-                else:
-                    jt0 = joint_targets[0, 0, :]
+            if hasattr(self.env, "joint_range"):
+                jt_seq = jnp.clip(jt_seq, self.env.joint_range[:, 0], self.env.joint_range[:, 1])
 
-            # Joint range clamp (safety)
-            if hasattr(self.env, 'joint_range'):
-                jt0 = jnp.clip(jt0, self.env.joint_range[:, 0], self.env.joint_range[:, 1])
-
-            # ---- Jump mitigation: warmup blend + clamp ----
             alpha = self._compute_alpha()
-            jt0 = self._warmstart_blend_jt0(jt0, alpha)
+            jt0 = self._warmstart_blend_jt0(jt_seq[0], alpha)
             jt0 = self._clamp_jt0(jt0)
 
-            # Startup hold: force home pose and zero torque to avoid initial jump
             if self._in_startup_hold():
-                jt0 = self._q_home
+                jt_seq = jnp.tile(self._q_home[None, :], (self.n_acts, 1))
+            elif alpha < 1.0:
+                jt_seq = jnp.tile(jt0[None, :], (self.n_acts, 1))
+            else:
+                jt_seq = jt_seq.at[0].set(jt0)
 
-            # torque conversion
+            jt_seq = self._clamp_seq_delta(jt_seq, self.max_seq_delta)
+
             taus = self.env.act2tau(us0, state.pipeline_state)
-
-            # During warmup, disable torque to avoid impulse
             if (alpha < 1.0) or self._in_startup_hold():
                 taus = taus * 0.0
-            # ---------------------------------------------
 
-            # send control (only first step)
-            self.acts_shared[0, : jt0.shape[0]] = np.asarray(jt0, dtype=np.float32)
-            self.tau_shared[0, : taus.shape[0]] = np.asarray(taus, dtype=np.float32)
+            jt_seq_np = np.asarray(jt_seq, dtype=np.float32)
+            self.acts_shared[:, :] = jt_seq_np
+
+            tau_np = np.asarray(taus, dtype=np.float32).reshape(1, -1)
+            self.tau_shared[:, :] = np.repeat(tau_np, self.n_acts, axis=0)
 
             self.plan_time_shared[0] = plan_time
             self.refs_shared[:, :, :] = x_targets[: self.refs_shared.shape[0], :, :]
 
-            # record time
+            self._debug_counter += 1
+            if self._debug_counter % 100 == 0:
+                std0 = float(np.std(jt_seq_np[:, 0]))
+                norm0 = float(np.linalg.norm(jt_seq_np[0] - np.asarray(self._q_home)))
+                print(
+                    f"[DBG] alpha={alpha:.2f}, jt_std0={std0:.5f}, "
+                    f"jt0_from_home={norm0:.5f}, t={plan_time:.2f}"
+                )
+
             last_plan_time = plan_time
             if time.time() - t0 > self.ctrl_dt:
-                print(f"[WRAN] real overtime {(time.time()-t0)*1000:.1f} ms")
+                print(f"[WARN] real overtime {(time.time() - t0) * 1000:.1f} ms")
 
 
 def main(args=None):
     art.tprint("LeCAR @ CMU\nDIAL-MPC\nPLANNER", font="big", chr_ignore=True)
     parser = argparse.ArgumentParser()
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--config", type=str, default="config.yaml", help="Path to config file"
-    )
-    group.add_argument(
-        "--example",
-        type=str,
-        default=None,
-        help="Example to run",
-    )
-    group.add_argument(
-        "--list-examples",
-        action="store_true",
-        help="List available examples",
-    )
-    parser.add_argument(
-        "--custom-env",
-        type=str,
-        default=None,
-        help="Custom environment to import dynamically",
-    )
+    group.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
+    group.add_argument("--example", type=str, default=None, help="Example to run")
+    group.add_argument("--list-examples", action="store_true", help="List available examples")
+    parser.add_argument("--custom-env", type=str, default=None, help="Custom environment to import dynamically")
     args = parser.parse_args(args)
 
     if args.custom_env is not None:
@@ -391,18 +362,14 @@ def main(args=None):
         if args.example not in deploy_examples:
             print(f"Example {args.example} not found.")
             return
-        config_dict = yaml.safe_load(
-            open(get_example_path(args.example + ".yaml"), "r")
-        )
+        config_dict = yaml.safe_load(open(get_example_path(args.example + ".yaml"), "r"))
     else:
         config_dict = yaml.safe_load(open(args.config, "r"))
 
     print("Creating environment")
     dial_config = load_dataclass_from_dict(DialConfig, config_dict)
     env_config_type = dial_envs.get_config(dial_config.env_name)
-    env_config = load_dataclass_from_dict(
-        env_config_type, config_dict, convert_list_to_array=True
-    )
+    env_config = load_dataclass_from_dict(env_config_type, config_dict, convert_list_to_array=True)
     env = brax_envs.get_environment(dial_config.env_name, config=env_config)
 
     mbd_publisher = MBDPublisher(env, env_config, dial_config)
