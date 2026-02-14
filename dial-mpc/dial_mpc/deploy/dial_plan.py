@@ -73,15 +73,17 @@ class MBDPublisher:
         self.default_q = self.env.sys.mj_model.keyframe("home").qpos
 
         # warm-start / anti-spike
-        self.startup_hold_sec = 1.2
+        self.startup_hold_sec = float(getattr(self.env_config, "startup_hold_sec", 1.5))
         self._startup_t0 = None
-        self.warmup_sec = 2.0
+        self.warmup_sec = max(
+            4.0, float(getattr(self.env_config, "ramp_up_time", 8.0)) * 0.35
+        )
         self._warmup_t0 = None
 
         self._q_home = jnp.array(self.default_q[7:7 + self.nu])
         self.enable_joint_clamp = True
-        self.max_joint_delta = 0.08
-        self.max_seq_delta = 0.06
+        self.max_joint_delta = 0.015
+        self.max_seq_delta = 0.010
         self._jt_prev = jnp.array(self.default_q[7:7 + self.nu])
 
         self._debug_counter = 0
@@ -166,7 +168,12 @@ class MBDPublisher:
         return float(max(0.0, min(1.0, elapsed / self.warmup_sec)))
 
     def _warmstart_blend_jt0(self, jt0: jax.Array, alpha: float) -> jax.Array:
-        return (1.0 - alpha) * self._q_home + alpha * jt0
+        alpha_smooth = alpha * alpha
+        return (1.0 - alpha_smooth) * self._q_home + alpha_smooth * jt0
+
+    def _blend_seq_home(self, jt_seq: jax.Array, alpha: float) -> jax.Array:
+        alpha_smooth = alpha * alpha
+        return (1.0 - alpha_smooth) * self._q_home[None, :] + alpha_smooth * jt_seq
 
     def _clamp_jt0(self, jt0: jax.Array) -> jax.Array:
         if not self.enable_joint_clamp:
@@ -305,11 +312,14 @@ class MBDPublisher:
             if self._in_startup_hold():
                 jt_seq = jnp.tile(self._q_home[None, :], (self.n_acts, 1))
             elif alpha < 1.0:
-                jt_seq = jnp.tile(jt0[None, :], (self.n_acts, 1))
+                jt_seq = self._blend_seq_home(jt_seq, alpha)
+                jt_seq = jt_seq.at[0].set(jt0)
             else:
                 jt_seq = jt_seq.at[0].set(jt0)
 
             jt_seq = self._clamp_seq_delta(jt_seq, self.max_seq_delta)
+            if hasattr(self.env, "joint_range"):
+                jt_seq = jnp.clip(jt_seq, self.env.joint_range[:, 0], self.env.joint_range[:, 1])
 
             taus = self.env.act2tau(us0, state.pipeline_state)
             if (alpha < 1.0) or self._in_startup_hold():

@@ -37,6 +37,7 @@ class DialSimConfig:
     real_time_factor: float
     sim_dt: float
     sync_mode: bool
+    draw_refs: bool = False
 
 
 class DialSim:
@@ -52,6 +53,7 @@ class DialSim:
         self.t = 0.0
         self.sync_mode = sim_config.sync_mode
         self.leg_control = sim_config.sim_leg_control
+        self.draw_refs = bool(sim_config.draw_refs)
 
         self.mj_model = mujoco.MjModel.from_xml_path(
             get_model_path(sim_config.robot_name, sim_config.scene_name).as_posix()
@@ -73,7 +75,7 @@ class DialSim:
 
         # position cmd smoothing (prevents start spike)
         self.enable_cmd_slew = True
-        self.cmd_slew_step = 0.05
+        self.cmd_slew_step = 0.02
         self.prev_pos_cmd = self.default_q[7:7 + self.Nu].copy()
 
         if self.mj_model.actuator_ctrlrange.shape[0] == self.Nu:
@@ -140,21 +142,26 @@ class DialSim:
             self.mj_model, self.mj_data, show_left_ui=False, show_right_ui=False
         )
 
-        cnt = 0
-        viewer.user_scn.ngeom = 0
-        for i in range(self.n_acts - 1):
-            for j in range(self.mj_model.nu):
-                color = np.array([1.0 * i / max(1, (self.n_acts - 1)), 1.0 * j / max(1, self.mj_model.nu), 0.0, 1.0])
-                mujoco.mjv_initGeom(
-                    viewer.user_scn.geoms[cnt],
-                    type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-                    size=np.zeros(3),
-                    rgba=color,
-                    pos=self.refs_shared[i, j, :],
-                    mat=np.eye(3).flatten(),
-                )
-                cnt += 1
-        viewer.user_scn.ngeom = cnt
+        if self.draw_refs:
+            cnt = 0
+            viewer.user_scn.ngeom = 0
+            for i in range(self.n_acts - 1):
+                for j in range(self.mj_model.nu):
+                    color = np.array(
+                        [1.0 * i / max(1, (self.n_acts - 1)), 1.0 * j / max(1, self.mj_model.nu), 0.0, 1.0]
+                    )
+                    mujoco.mjv_initGeom(
+                        viewer.user_scn.geoms[cnt],
+                        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+                        size=np.zeros(3),
+                        rgba=color,
+                        pos=self.refs_shared[i, j, :],
+                        mat=np.eye(3).flatten(),
+                    )
+                    cnt += 1
+            viewer.user_scn.ngeom = cnt
+        else:
+            viewer.user_scn.ngeom = 0
         viewer.sync()
 
         while True:
@@ -164,17 +171,18 @@ class DialSim:
                     handles_ref[j].set_ydata(self.qref_history[:, j])
                 plt.pause(0.001)
 
-            for i in range(self.n_acts - 1):
-                for j in range(self.mj_model.nu):
-                    r0 = self.refs_shared[i, j, :]
-                    r1 = self.refs_shared[i + 1, j, :]
-                    mujoco.mjv_connector(
-                        viewer.user_scn.geoms[i * self.mj_model.nu + j],
-                        mujoco.mjtGeom.mjGEOM_CAPSULE,
-                        0.02,
-                        r0,
-                        r1,
-                    )
+            if self.draw_refs:
+                for i in range(self.n_acts - 1):
+                    for j in range(self.mj_model.nu):
+                        r0 = self.refs_shared[i, j, :]
+                        r1 = self.refs_shared[i + 1, j, :]
+                        mujoco.mjv_connector(
+                            viewer.user_scn.geoms[i * self.mj_model.nu + j],
+                            mujoco.mjtGeom.mjGEOM_CAPSULE,
+                            0.02,
+                            r0,
+                            r1,
+                        )
 
             if self.sync_mode:
                 while self.t <= (self.plan_time_shared[0] + self.ctrl_dt):
