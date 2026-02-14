@@ -185,11 +185,16 @@ class UnitreeGo2Env(BaseEnv):
             state.info["ang_vel_tar"] = jnp.minimum(
                 ang_vel_tar * t / self._config.ramp_up_time, ang_vel_tar
             )
-
         # startup hold: keep zero targets for a short time to avoid initial jump
-        if (self._config.startup_hold_sec > 0.0) and (t < self._config.startup_hold_sec):
-            state.info["vel_tar"] = jnp.array([0.0, 0.0, 0.0])
-            state.info["ang_vel_tar"] = jnp.array([0.0, 0.0, 0.0])
+        # NOTE: use jnp.where (not python if) because `t` is traced in JAX scan.
+        if self._config.startup_hold_sec > 0.0:
+            hold_mask = t < self._config.startup_hold_sec
+            zero3 = jnp.array([0.0, 0.0, 0.0])
+            state.info["vel_tar"] = jnp.where(hold_mask, zero3, state.info["vel_tar"])
+            state.info["ang_vel_tar"] = jnp.where(
+                hold_mask, zero3, state.info["ang_vel_tar"]
+            )
+
 
 # reward
         # foot contact data based on z-position (MUST KEEP for state management)
