@@ -5,6 +5,11 @@ import importlib
 import sys
 import argparse
 
+try:
+    from multiprocessing import resource_tracker
+except Exception:
+    resource_tracker = None
+
 import yaml
 import numpy as np
 import art
@@ -34,6 +39,27 @@ xla_flags += " --xla_gpu_triton_gemm_any=True"
 os.environ["XLA_FLAGS"] = xla_flags
 
 
+def _unregister_shared_memory(shm_obj: shared_memory.SharedMemory) -> None:
+    # Planner is not the owner of these shared memories (create=False).
+    # Unregister from resource_tracker to avoid noisy "leaked shared_memory"
+    # warnings when simulator already unlinked segments.
+    if resource_tracker is None:
+        return
+    shm_name = getattr(shm_obj, "_name", None) or getattr(shm_obj, "name", None)
+    if not shm_name:
+        return
+    try:
+        resource_tracker.unregister(shm_name, "shared_memory")
+    except Exception:
+        pass
+
+
+def _attach_shared_memory(name: str, size: int) -> shared_memory.SharedMemory:
+    shm_obj = shared_memory.SharedMemory(name=name, create=False, size=size)
+    _unregister_shared_memory(shm_obj)
+    return shm_obj
+
+
 def pipeline_init(
     sys: System,
     q: jax.Array,
@@ -56,8 +82,10 @@ def pipeline_init(
     except AttributeError as exc:
         print(f"[WARN] _reformat_contact skipped due to API mismatch: {exc}")
     extra = dict(data.__dict__)
-    if "contact" not in extra and hasattr(data, "contact"):
-        extra["contact"] = data.contact
+    data_impl = getattr(data, "_impl", None)
+    contact = getattr(data_impl, "contact", None) if data_impl is not None else None
+    if "contact" not in extra and contact is not None:
+        extra["contact"] = contact
     return MjxState(q=q, qd=qd, x=x, xd=xd, **extra)
 
 
@@ -98,42 +126,34 @@ class MBDPublisher:
         self._was_in_hold = False
 
         # publisher
-        self.acts_shm = shared_memory.SharedMemory(
-            name="acts_shm", create=False, size=self.n_acts * self.nu * 32
-        )
+        self.acts_shm = _attach_shared_memory(name="acts_shm", size=self.n_acts * self.nu * 32)
         self.acts_shared = np.ndarray(
             (self.n_acts, self.nu), dtype=np.float32, buffer=self.acts_shm.buf
         )
         self.acts_shared[:] = self.default_q[7:7 + self.nu]
 
-        self.refs_shm = shared_memory.SharedMemory(
-            name="refs_shm", create=False, size=self.n_acts * self.env.sys.nu * 3 * 32
+        self.refs_shm = _attach_shared_memory(
+            name="refs_shm", size=self.n_acts * self.env.sys.nu * 3 * 32
         )
         self.refs_shared = np.ndarray(
             (self.n_acts, self.env.sys.nu, 3), dtype=np.float32, buffer=self.refs_shm.buf
         )
         self.refs_shared[:] = 1.0
 
-        self.plan_time_shm = shared_memory.SharedMemory(
-            name="plan_time_shm", create=False, size=32
-        )
+        self.plan_time_shm = _attach_shared_memory(name="plan_time_shm", size=32)
         self.plan_time_shared = np.ndarray(1, dtype=np.float32, buffer=self.plan_time_shm.buf)
         self.plan_time_shared[0] = -0.02
 
         # listener
-        self.time_shm = shared_memory.SharedMemory(name="time_shm", create=False, size=32)
+        self.time_shm = _attach_shared_memory(name="time_shm", size=32)
         self.time_shared = np.ndarray(1, dtype=np.float32, buffer=self.time_shm.buf)
         self.time_shared[0] = 0.0
 
-        self.state_shm = shared_memory.SharedMemory(
-            name="state_shm", create=False, size=self.nx * 32
-        )
+        self.state_shm = _attach_shared_memory(name="state_shm", size=self.nx * 32)
         self.state_shared = np.ndarray((self.nx,), dtype=np.float32, buffer=self.state_shm.buf)
         self.state_shared[: self.default_q.shape[0]] = self.default_q
 
-        self.tau_shm = shared_memory.SharedMemory(
-            name="tau_shm", create=False, size=self.n_acts * self.nu * 32
-        )
+        self.tau_shm = _attach_shared_memory(name="tau_shm", size=self.n_acts * self.nu * 32)
         self.tau_shared = np.ndarray(
             (self.n_acts, self.nu), dtype=np.float32, buffer=self.tau_shm.buf
         )
@@ -381,6 +401,21 @@ class MBDPublisher:
             if time.time() - t0 > self.ctrl_dt:
                 print(f"[WARN] real overtime {(time.time() - t0) * 1000:.1f} ms")
 
+    @staticmethod
+    def _safe_close(shm_obj):
+        try:
+            shm_obj.close()
+        except Exception:
+            pass
+
+    def close(self):
+        self._safe_close(self.acts_shm)
+        self._safe_close(self.refs_shm)
+        self._safe_close(self.plan_time_shm)
+        self._safe_close(self.time_shm)
+        self._safe_close(self.state_shm)
+        self._safe_close(self.tau_shm)
+
 
 def main(args=None):
     art.tprint("LeCAR @ CMU\nDIAL-MPC\nPLANNER", font="big", chr_ignore=True)
@@ -425,6 +460,8 @@ def main(args=None):
         mbd_publisher.main_loop()
     except KeyboardInterrupt:
         pass
+    finally:
+        mbd_publisher.close()
 
 
 if __name__ == "__main__":

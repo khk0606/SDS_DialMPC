@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -16,10 +17,16 @@ def _cmd(script_path: str, config: Path, custom_env: str | None) -> List[str]:
     return cmd
 
 
-def _terminate_process(proc: subprocess.Popen, grace_sec: float) -> int:
+def _terminate_process(proc: subprocess.Popen, grace_sec: float, sigint_first: bool = False) -> int:
     if proc.poll() is not None:
         return int(proc.returncode)
-    proc.terminate()
+    if sigint_first:
+        try:
+            proc.send_signal(signal.SIGINT)
+        except Exception:
+            proc.terminate()
+    else:
+        proc.terminate()
     try:
         proc.wait(timeout=grace_sec)
     except subprocess.TimeoutExpired:
@@ -119,7 +126,7 @@ def main() -> None:
 
         plan_rc = 0
         if plan_proc is not None:
-            plan_rc = _terminate_process(plan_proc, grace_sec=args.plan_grace_sec)
+            plan_rc = _terminate_process(plan_proc, grace_sec=args.plan_grace_sec, sigint_first=True)
 
         print(f"[pair] sim_rc={sim_rc} plan_rc={plan_rc} timed_out={timed_out}")
         if timed_out:
