@@ -16,13 +16,9 @@ import art
 
 import jax
 from jax import numpy as jnp
-from mujoco import mjx
 
 import brax.envs as brax_envs
-from brax.mjx.base import State as MjxState
-from brax.mjx.pipeline import _reformat_contact
 from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
-from brax.base import Motion, System, Transform
 
 import dial_mpc.envs as dial_envs
 from dial_mpc.core.dial_core import DialConfig, MBDPI
@@ -60,35 +56,6 @@ def _attach_shared_memory(name: str, size: int) -> shared_memory.SharedMemory:
     return shm_obj
 
 
-def pipeline_init(
-    sys: System,
-    q: jax.Array,
-    qd: jax.Array,
-) -> MjxState:
-    data = mjx.make_data(sys)
-    data = data.replace(qpos=q, qvel=qd)
-
-    q, qd = data.qpos, data.qvel
-    x = Transform(pos=data.xpos[1:], rot=data.xquat[1:])
-    cvel = Motion(vel=data.cvel[1:, 3:], ang=data.cvel[1:, :3])
-    offset = data.xpos[1:, :] - data.subtree_com[sys.body_rootid[1:]]
-    offset = Transform.create(pos=offset)
-    xd = offset.vmap().do(cvel)
-
-    # Compatibility fallback for version mismatches between brax and mujoco-mjx.
-    # Some combinations expose contact fields without `.pos`, which breaks _reformat_contact.
-    try:
-        data = _reformat_contact(sys, data)
-    except AttributeError as exc:
-        print(f"[WARN] _reformat_contact skipped due to API mismatch: {exc}")
-    extra = dict(data.__dict__)
-    data_impl = getattr(data, "_impl", None)
-    contact = getattr(data_impl, "contact", None) if data_impl is not None else None
-    if "contact" not in extra and contact is not None:
-        extra["contact"] = contact
-    return MjxState(q=q, qd=qd, x=x, xd=xd, **extra)
-
-
 class MBDPublisher:
     def __init__(self, env: BaseEnv, env_config: BaseEnvConfig, dial_config: DialConfig):
         self.dial_config = dial_config
@@ -97,7 +64,7 @@ class MBDPublisher:
 
         self.mbdpi = MBDPI(self.dial_config, self.env)
         self.rng = jax.random.PRNGKey(seed=self.dial_config.seed)
-        self.pipeline_init_jit = jax.jit(pipeline_init)
+        self.pipeline_init_jit = jax.jit(self.env.pipeline_init)
         self.shift_vmap = jax.jit(jax.vmap(self.shift, in_axes=(1, None), out_axes=1))
 
         self.Y = jnp.zeros([self.dial_config.Hnode + 1, self.mbdpi.nu])
@@ -166,7 +133,7 @@ class MBDPublisher:
         q = jnp.array(q)
         qd = jnp.array(qd)
         state = self.env.reset(jax.random.PRNGKey(0))
-        pipeline_state = self.pipeline_init_jit(self.env.sys, q, qd)
+        pipeline_state = self.pipeline_init_jit(q, qd)
         obs = self.env._get_obs(pipeline_state, state.info)
         return state.replace(pipeline_state=pipeline_state, obs=obs)
 
