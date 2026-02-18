@@ -1,0 +1,35 @@
+reason: explore_random
+generated_at_epoch: 1771426768
+overrides:
+  seed: 957389
+  default_vx: 0.15910338153899767
+  startup_hold_sec: 1.859498615440034
+  ramp_up_time: 16.14701824803135
+  gait: trot
+  reward:
+    reward_vel_x_w: 1.0130181525650617
+    reward_upright_w: 0.5430738669106583
+    reward_height_w: 0.5870168794739864
+    penalty_joint_pose_w: 0.1921491831431454
+    penalty_joint_vel_w: 0.002509118637423489
+    penalty_energy_w: 0.0018137880987280943
+    penalty_collapse_w: 1.718939564049455
+    penalty_rear_up_w: 31.517192902231113
+    penalty_standstill_w: 0.35698026804380956
+    target_base_height: 0.2973266381702608
+overrides_flat:
+  seed: 957389
+  default_vx: 0.15910338153899767
+  startup_hold_sec: 1.859498615440034
+  ramp_up_time: 16.14701824803135
+  gait: trot
+  reward.reward_vel_x_w: 1.0130181525650617
+  reward.reward_upright_w: 0.5430738669106583
+  reward.reward_height_w: 0.5870168794739864
+  reward.penalty_joint_pose_w: 0.1921491831431454
+  reward.penalty_joint_vel_w: 0.002509118637423489
+  reward.penalty_energy_w: 0.0018137880987280943
+  reward.penalty_collapse_w: 1.718939564049455
+  reward.penalty_rear_up_w: 31.517192902231113
+  reward.penalty_standstill_w: 0.35698026804380956
+  reward.target_base_height: 0.2973266381702608

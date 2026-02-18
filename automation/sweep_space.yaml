@@ -1,0 +1,64 @@
+seed:
+  dist: int_uniform
+  min: 0
+  max: 1000000
+
+# Environment-level knobs
+default_vx:
+  dist: uniform
+  min: 0.10
+  max: 0.80
+startup_hold_sec:
+  dist: uniform
+  min: 1.0
+  max: 3.0
+ramp_up_time:
+  dist: uniform
+  min: 4.0
+  max: 20.0
+gait:
+  dist: choice
+  values: ["walk", "trot", "gallop"]
+
+# Reward-level knobs (requires config plumbing in env/reward code)
+reward:
+  reward_vel_x_w:
+    dist: loguniform
+    min: 0.4
+    max: 8.0
+  reward_upright_w:
+    dist: loguniform
+    min: 0.2
+    max: 5.0
+  reward_height_w:
+    dist: loguniform
+    min: 0.2
+    max: 4.0
+  penalty_joint_pose_w:
+    dist: loguniform
+    min: 0.01
+    max: 0.8
+  penalty_joint_vel_w:
+    dist: loguniform
+    min: 0.0001
+    max: 0.01
+  penalty_energy_w:
+    dist: loguniform
+    min: 0.00005
+    max: 0.005
+  penalty_collapse_w:
+    dist: loguniform
+    min: 1.0
+    max: 30.0
+  penalty_rear_up_w:
+    dist: loguniform
+    min: 1.0
+    max: 40.0
+  penalty_standstill_w:
+    dist: loguniform
+    min: 0.05
+    max: 5.0
+  target_base_height:
+    dist: uniform
+    min: 0.26
+    max: 0.34

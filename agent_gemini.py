@@ -1,18 +1,28 @@
 import requests
 import json
 import os
-import time
+from pathlib import Path
 
-# [중요] 여기에 본인의 API 키를 입력하세요
-API_KEY = "AIzaSyBjtl4NJlMbsEm1JNV3zw5H8ZE6_jybeGs" 
+
+def _get_api_key() -> str:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+    return api_key
+
+
+def _default_prompt_dir() -> Path:
+    return Path(__file__).resolve().parent / "prompts"
 
 class Agent():
     def __init__(self, system_prompt_path, cfg):
+        system_prompt_path = str(system_prompt_path)
+
         # 1. 프롬프트 파일 로드
         if not os.path.exists(system_prompt_path):
             # 경로가 안 맞을 경우 prompts 폴더 안에서 찾아보기
             base_name = os.path.basename(system_prompt_path)
-            alt_path = os.path.join("prompts", base_name)
+            alt_path = (_default_prompt_dir() / base_name).as_posix()
             if os.path.exists(alt_path):
                 system_prompt_path = alt_path
             else:
@@ -51,7 +61,8 @@ class Agent():
 
     def query(self):
         # 3. REST API URL 직접 호출 (v1beta)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={API_KEY}"
+        api_key = _get_api_key()
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={api_key}"
         
         headers = {'Content-Type': 'application/json'}
         payload = {
@@ -64,7 +75,7 @@ class Agent():
 
         try:
             # requests로 직접 전송 (라이브러리 버전 문제 해결)
-            response = requests.post(url, headers=headers, data=json.dumps(payload))
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=60)
             
             if response.status_code != 200:
                 print(f"Error {response.status_code}: {response.text}")
@@ -90,16 +101,18 @@ class Agent():
 # --- 하위 클래스 (기존 유지) ---
 
 class TaskDescriptor(Agent):
-    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
-        super().__init__(f"{prompt_dir}/task_descriptor_system.txt", cfg)
+    def __init__(self, cfg, prompt_dir=None):
+        prompt_dir = Path(prompt_dir) if prompt_dir else _default_prompt_dir()
+        super().__init__(prompt_dir / "task_descriptor_system.txt", cfg)
     
     def analyse(self, encoded_frame_grid):
         self.prepare_user_content([{"type":"image_uri", "data": encoded_frame_grid}])
         return self.query()
 
 class ContactSequenceAnalyser(Agent):
-    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
-        super().__init__(f"{prompt_dir}/contact_sequence_system.txt", cfg)
+    def __init__(self, cfg, prompt_dir=None):
+        prompt_dir = Path(prompt_dir) if prompt_dir else _default_prompt_dir()
+        super().__init__(prompt_dir / "contact_sequence_system.txt", cfg)
         
     def analyse(self, encoded_frame_grid):
         self.prepare_user_content([{"type":"image_uri", "data": encoded_frame_grid}])
@@ -111,16 +124,18 @@ class ContactSequenceAnalyser(Agent):
         return self.query() # 2차 검증
 
 class TaskRequirementAnalyser(Agent):
-    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
-        super().__init__(f"{prompt_dir}/task_requirement_system.txt", cfg)
+    def __init__(self, cfg, prompt_dir=None):
+        prompt_dir = Path(prompt_dir) if prompt_dir else _default_prompt_dir()
+        super().__init__(prompt_dir / "task_requirement_system.txt", cfg)
         
     def analyse(self, encoded_frame_grid):
         self.prepare_user_content([{"type":"image_uri", "data": encoded_frame_grid}])
         return self.query()
 
 class GaitAnalyser(Agent):
-    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
-        super().__init__(f"{prompt_dir}/gait_pattern_system.txt", cfg)
+    def __init__(self, cfg, prompt_dir=None):
+        prompt_dir = Path(prompt_dir) if prompt_dir else _default_prompt_dir()
+        super().__init__(prompt_dir / "gait_pattern_system.txt", cfg)
         
     def analyse(self, encoded_frame_grid, contact_pattern):
         self.prepare_user_content([
@@ -130,10 +145,11 @@ class GaitAnalyser(Agent):
         return self.query()
 
 class SUSGenerator(Agent):
-    def __init__(self, cfg, prompt_dir="/home/kang/SDS_DialMPC/prompts"):
-        super().__init__(f"{prompt_dir}/SUS_generation_prompt.txt", cfg)
+    def __init__(self, cfg, prompt_dir=None):
+        prompt_dir = Path(prompt_dir) if prompt_dir else _default_prompt_dir()
+        super().__init__(prompt_dir / "SUS_generation_prompt.txt", cfg)
         self.cfg = cfg
-        self.prompt_dir = prompt_dir
+        self.prompt_dir = str(prompt_dir)
         
     def generate_sus_prompt(self, encoded_gt_frame_grid):
         print("\n--- [1/4] Task Description ---")

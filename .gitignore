@@ -6,10 +6,12 @@ dist/
 build/
 .venv/
 venv/
+.DS_Store
 
 output/
 **/output/
 logs/
+runs/
 *.log
 MUJOCO_LOG.TXT
 

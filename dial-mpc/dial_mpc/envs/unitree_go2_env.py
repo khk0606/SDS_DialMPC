@@ -35,6 +35,8 @@ class UnitreeGo2EnvConfig(BaseEnvConfig):
     startup_hold_sec: float = 0.0
     ramp_up_time: float = 2.0
     gait: str = "trot"
+    # Optional reward parameters loaded from YAML under `reward: {...}`.
+    reward: Union[Dict[str, float], None] = None
 
 
 class UnitreeGo2Env(BaseEnv):
@@ -185,6 +187,7 @@ class UnitreeGo2Env(BaseEnv):
             state.info["ang_vel_tar"] = jnp.minimum(
                 ang_vel_tar * t / self._config.ramp_up_time, ang_vel_tar
             )
+
         # startup hold: keep zero targets for a short time to avoid initial jump
         # NOTE: use jnp.where (not python if) because `t` is traced in JAX scan.
         if self._config.startup_hold_sec > 0.0:
@@ -194,7 +197,6 @@ class UnitreeGo2Env(BaseEnv):
             state.info["ang_vel_tar"] = jnp.where(
                 hold_mask, zero3, state.info["ang_vel_tar"]
             )
-
 
 # reward
         # foot contact data based on z-position (MUST KEEP for state management)
@@ -789,102 +791,3 @@ class UnitreeGo2CrateEnv(UnitreeGo2Env):
 brax_envs.register_environment("unitree_go2_walk", UnitreeGo2Env)
 brax_envs.register_environment("unitree_go2_seq_jump", UnitreeGo2SeqJumpEnv)
 brax_envs.register_environment("unitree_go2_crate_climb", UnitreeGo2CrateEnv)
-
-########################################
-# [INJECTED BY SDS] Generated Reward Function
-########################################
-import jax
-import jax.numpy as jnp
-from brax import math
-from dial_mpc.utils.function_utils import global_to_body_velocity
-
-
-def compute_sds_reward(pipeline_state, state_info, env):
-    """
-    Compute SDS reward for quadruped locomotion.
-    Auto-generated from Motion Analysis Report.
-    """
-    # ============================================
-    # 1. Extract state variables
-    # ============================================
-    torso_idx = env._torso_idx - 1
-    
-    # Torso state
-    torso_pos = pipeline_state.x.pos[torso_idx]
-    torso_rot = pipeline_state.x.rot[torso_idx]
-    torso_vel = pipeline_state.xd.vel[torso_idx]
-    torso_ang = pipeline_state.xd.ang[torso_idx]
-    
-    # Feet positions
-    feet_pos = pipeline_state.site_xpos[env._feet_site_id]
-    feet_z = feet_pos[:, 2]
-    
-    # Joint state
-    joint_angles = pipeline_state.q[7:]
-    joint_vel = pipeline_state.qvel[6:]
-    ctrl = pipeline_state.ctrl
-    
-    # Targets from state_info
-    vel_tar = jnp.array([3.5, 0.0, 0.0])
-    ang_vel_tar = state_info["ang_vel_tar"]
-    pos_tar = state_info["pos_tar"]
-    
-    # Body-frame velocity
-    vb = global_to_body_velocity(torso_vel, torso_rot)
-    ab = global_to_body_velocity(torso_ang * jnp.pi / 180.0, torso_rot)
-    
-    # Orientation (euler angles)
-    euler = math.quat_to_euler(torso_rot)
-    roll, pitch, yaw = euler[0], euler[1], euler[2]
-    
-    # ============================================
-    # 2. Reward terms
-    # ============================================
-    # Forward velocity tracking (target 8-14 m/s, using vel_tar[0] as the specific target)
-    reward_vel_x = -jnp.square(vb[0] - vel_tar[0])
-
-    # Lateral velocity penalty (should be close to 0)
-    penalty_vel_y = jnp.square(vb[1])
-
-    # Yaw rate tracking for agile navigation
-    reward_yaw_rate = -jnp.square(ab[2] - ang_vel_tar[2])
-
-    # CoM height maintenance within a dynamic range (e.g., 0.2m to 0.6m)
-    # Penalizes being outside this range, allows oscillation within.
-    reward_height_range = -jnp.square(jnp.clip(torso_pos[2], 0.2, 0.6) - torso_pos[2])
-
-    # Pitch orientation within a dynamic range (e.g., -0.5 to 0.5 rad)
-    # Penalizes extreme pitch, allows natural gallop oscillations.
-    reward_pitch_range = -jnp.square(jnp.clip(pitch, -0.5, 0.5) - pitch)
-
-    # Roll stability penalty (should be close to 0 for straight, allows slight deviation)
-    penalty_roll = jnp.square(roll)
-
-    # Aerial phase bonus (characteristic of gallop)
-    # Rewards when all feet are significantly off the ground.
-    min_feet_z = jnp.min(feet_z)
-    reward_aerial_phase = jnp.where(min_feet_z > 0.02, 1.0, 0.0)
-
-    # Energy penalty (control effort)
-    penalty_energy = jnp.sum(jnp.square(ctrl))
-
-    # Joint velocity penalty (for smooth motion)
-    penalty_joint_vel = jnp.sum(jnp.square(joint_vel))
-    
-    # ============================================
-    # 3. Total reward
-    # ============================================
-    total_reward = (
-    reward_vel_x * 2.5
-    + reward_yaw_rate * 0.8
-    + reward_height_range * 1.5
-    + reward_pitch_range * 1.0
-    + reward_aerial_phase * 0.7
-    - penalty_vel_y * 2.0
-    - penalty_roll * 1.5
-    - penalty_energy * 0.001
-    - penalty_joint_vel * 0.005
-    )
-    
-    return total_reward
-

@@ -49,8 +49,16 @@ def pipeline_init(
     offset = Transform.create(pos=offset)
     xd = offset.vmap().do(cvel)
 
-    data = _reformat_contact(sys, data)
-    return MjxState(q=q, qd=qd, x=x, xd=xd, **data.__dict__)
+    # Compatibility fallback for version mismatches between brax and mujoco-mjx.
+    # Some combinations expose contact fields without `.pos`, which breaks _reformat_contact.
+    try:
+        data = _reformat_contact(sys, data)
+    except AttributeError as exc:
+        print(f"[WARN] _reformat_contact skipped due to API mismatch: {exc}")
+    extra = dict(data.__dict__)
+    if "contact" not in extra and hasattr(data, "contact"):
+        extra["contact"] = data.contact
+    return MjxState(q=q, qd=qd, x=x, xd=xd, **extra)
 
 
 class MBDPublisher:
@@ -73,20 +81,21 @@ class MBDPublisher:
         self.default_q = self.env.sys.mj_model.keyframe("home").qpos
 
         # warm-start / anti-spike
-        self.startup_hold_sec = float(getattr(self.env_config, "startup_hold_sec", 1.5))
+        self.startup_hold_sec = float(getattr(self.env_config, "startup_hold_sec", 2.0))
         self._startup_t0 = None
+        self._hold_release_t0 = None
         self.warmup_sec = max(
-            4.0, float(getattr(self.env_config, "ramp_up_time", 8.0)) * 0.35
+            4.0, float(getattr(self.env_config, "ramp_up_time", 10.0)) * 0.35
         )
-        self._warmup_t0 = None
 
         self._q_home = jnp.array(self.default_q[7:7 + self.nu])
         self.enable_joint_clamp = True
-        self.max_joint_delta = 0.015
+        self.max_joint_delta = 0.012
         self.max_seq_delta = 0.010
         self._jt_prev = jnp.array(self.default_q[7:7 + self.nu])
 
         self._debug_counter = 0
+        self._was_in_hold = False
 
         # publisher
         self.acts_shm = shared_memory.SharedMemory(
@@ -159,10 +168,9 @@ class MBDPublisher:
         return (time.time() - self._startup_t0) < self.startup_hold_sec
 
     def _compute_alpha(self) -> float:
-        if self._warmup_t0 is None:
-            self._warmup_t0 = time.time()
+        if self._hold_release_t0 is None:
             return 0.0
-        elapsed = time.time() - self._warmup_t0
+        elapsed = time.time() - self._hold_release_t0
         if self.warmup_sec <= 1e-6:
             return 1.0
         return float(max(0.0, min(1.0, elapsed / self.warmup_sec)))
@@ -242,7 +250,6 @@ class MBDPublisher:
             return us
         if us.ndim == 2:
             return us[:, 0] if us.shape[0] == self.nu else us[0, :]
-        # ndim == 3
         return us[0, :, 0] if us.shape[1] == self.nu else us[0, 0, :]
 
     def main_loop(self):
@@ -270,6 +277,25 @@ class MBDPublisher:
                 plan_time,
             )
 
+            in_hold = self._in_startup_hold()
+            if in_hold:
+                self.Y = self.Y * 0.0
+                jt_home = jnp.tile(self._q_home[None, :], (self.n_acts, 1))
+                self.acts_shared[:, :] = np.asarray(jt_home, dtype=np.float32)
+                self.tau_shared[:, :] = 0.0
+                self.refs_shared[:, :, :] = 0.0
+                self.plan_time_shared[0] = plan_time
+                self._was_in_hold = True
+                last_plan_time = plan_time
+                continue
+
+            if self._was_in_hold:
+                # release edge: reset planner state to avoid impulse at hold-off
+                self.Y = self.Y * 0.0
+                self._jt_prev = jnp.array(self._q_home)
+                self._hold_release_t0 = time.time()
+                self._was_in_hold = False
+
             shift_time = plan_time - last_plan_time
             if shift_time > self.ctrl_dt + 1e-3:
                 print(f"[WARN] sim overtime {(shift_time - self.ctrl_dt) * 1000:.1f} ms")
@@ -279,17 +305,19 @@ class MBDPublisher:
             else:
                 self.Y = self.shift_vmap(self.Y, shift_time)
 
-            n_diffuse = self.dial_config.Ndiffuse
             if first_time:
                 print("Performing JIT on DIAL-MPC")
-                n_diffuse = self.dial_config.Ndiffuse_init
-                first_time = False
-                factors = self.dial_config.traj_diffuse_factor ** (jnp.arange(n_diffuse))[:, None]
+                factors = self.dial_config.traj_diffuse_factor ** (
+                    jnp.arange(self.dial_config.Ndiffuse_init)
+                )[:, None]
                 (self.rng, self.Y, _), info = jax.lax.scan(
                     reverse_scan, (self.rng, self.Y, state), factors
                 )
+                first_time = False
 
-            factors = self.dial_config.traj_diffuse_factor ** (jnp.arange(self.dial_config.Ndiffuse))[:, None]
+            factors = self.dial_config.traj_diffuse_factor ** (
+                jnp.arange(self.dial_config.Ndiffuse)
+            )[:, None]
             (self.rng, self.Y, _), info = jax.lax.scan(
                 reverse_scan, (self.rng, self.Y, state), factors
             )
@@ -303,15 +331,17 @@ class MBDPublisher:
             jt_seq = self._to_joint_seq(joint_targets)
 
             if hasattr(self.env, "joint_range"):
-                jt_seq = jnp.clip(jt_seq, self.env.joint_range[:, 0], self.env.joint_range[:, 1])
+                jt_seq = jnp.clip(
+                    jt_seq,
+                    self.env.joint_range[:, 0],
+                    self.env.joint_range[:, 1],
+                )
 
             alpha = self._compute_alpha()
             jt0 = self._warmstart_blend_jt0(jt_seq[0], alpha)
             jt0 = self._clamp_jt0(jt0)
 
-            if self._in_startup_hold():
-                jt_seq = jnp.tile(self._q_home[None, :], (self.n_acts, 1))
-            elif alpha < 1.0:
+            if alpha < 1.0:
                 jt_seq = self._blend_seq_home(jt_seq, alpha)
                 jt_seq = jt_seq.at[0].set(jt0)
             else:
@@ -319,10 +349,14 @@ class MBDPublisher:
 
             jt_seq = self._clamp_seq_delta(jt_seq, self.max_seq_delta)
             if hasattr(self.env, "joint_range"):
-                jt_seq = jnp.clip(jt_seq, self.env.joint_range[:, 0], self.env.joint_range[:, 1])
+                jt_seq = jnp.clip(
+                    jt_seq,
+                    self.env.joint_range[:, 0],
+                    self.env.joint_range[:, 1],
+                )
 
             taus = self.env.act2tau(us0, state.pipeline_state)
-            if (alpha < 1.0) or self._in_startup_hold():
+            if alpha < 1.0:
                 taus = taus * 0.0
 
             jt_seq_np = np.asarray(jt_seq, dtype=np.float32)
@@ -372,9 +406,12 @@ def main(args=None):
         if args.example not in deploy_examples:
             print(f"Example {args.example} not found.")
             return
-        config_dict = yaml.safe_load(open(get_example_path(args.example + ".yaml"), "r"))
+        config_path = get_example_path(args.example + ".yaml")
     else:
-        config_dict = yaml.safe_load(open(args.config, "r"))
+        config_path = os.path.abspath(args.config)
+
+    print(f"[CONFIG] dial_plan.py using: {config_path}")
+    config_dict = yaml.safe_load(open(config_path, "r"))
 
     print("Creating environment")
     dial_config = load_dataclass_from_dict(DialConfig, config_dict)

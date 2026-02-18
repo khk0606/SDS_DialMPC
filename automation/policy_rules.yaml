@@ -1,0 +1,42 @@
+score:
+  hard_fail_score: -1000000000.0
+  base: 0.0
+  weights:
+    episode_return: 1.0
+    fall_count: -300.0
+    mean_vel_error: -80.0
+    mean_roll: -20.0
+    mean_pitch: -20.0
+    energy: -0.2
+    contact_match_score: 40.0
+
+classification:
+  early_fall_sec: 2.0
+  unstable_roll_abs: 0.30
+  unstable_pitch_abs: 0.30
+  wrong_gait_contact_score: 0.65
+  standstill_vel_error: 0.30
+  high_energy_threshold: 80.0
+
+label_adjustments:
+  early_fall:
+    reward.penalty_collapse_w: {op: mul, value: 1.25}
+    reward.penalty_rear_up_w: {op: mul, value: 1.20}
+    reward.reward_vel_x_w: {op: mul, value: 0.90}
+    startup_hold_sec: {op: add, value: 0.2}
+  unstable:
+    reward.reward_upright_w: {op: mul, value: 1.15}
+    reward.reward_height_w: {op: mul, value: 1.10}
+    ramp_up_time: {op: add, value: 0.5}
+  standstill:
+    reward.reward_vel_x_w: {op: mul, value: 1.15}
+    reward.penalty_standstill_w: {op: mul, value: 1.10}
+  wrong_gait:
+    reward.reward_vel_x_w: {op: mul, value: 0.95}
+  high_energy:
+    reward.penalty_energy_w: {op: mul, value: 1.20}
+    reward.penalty_joint_vel_w: {op: mul, value: 1.10}
+  compute_timeout:
+    # These keys are placeholders if mapped into config in later stages.
+    Nsample: {op: mul, value: 0.80}
+    Hsample: {op: mul, value: 0.90}

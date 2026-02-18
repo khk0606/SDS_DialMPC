@@ -11,10 +11,6 @@ from agent_gemini import SUSGenerator
 cfg = {
     "model": "gemini-2.5-flash"
 }
-OUTPUT_DIR = "/home/kang/SDS_DialMPC/output"
-
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
 
 def download_video(url, output_path="input_video.mp4"):
     print(f"Downloading video from {url}...")
@@ -29,7 +25,7 @@ def download_video(url, output_path="input_video.mp4"):
     print(f"Download complete: {output_path}")
     return output_path
 
-def create_frame_grid(video_path, grid_size=(2, 4)):
+def create_frame_grid(video_path, output_dir: str, grid_size=(2, 4)):
     print("Extracting frames...")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -57,7 +53,7 @@ def create_frame_grid(video_path, grid_size=(2, 4)):
         raise ValueError("No frames extracted!")
 
     grid_image = np.vstack(rows)
-    save_path = os.path.join(OUTPUT_DIR, f"{Path(video_path).stem}_frame_grid.png")
+    save_path = os.path.join(output_dir, f"{Path(video_path).stem}_frame_grid.png")
     cv2.imwrite(save_path, grid_image)
     print(f"Frame grid saved to: {save_path}")
 
@@ -71,14 +67,24 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=False, help="Input video path or URL")
     parser.add_argument("--output", required=False, help="Output SUS report path")
+    parser.add_argument(
+        "--output-dir",
+        required=False,
+        default=None,
+        help="Directory for generated artifacts (default: <repo>/output)",
+    )
     args = parser.parse_args()
 
     try:
+        base_dir = Path(__file__).resolve().parent
+        output_dir = Path(args.output_dir).resolve() if args.output_dir else (base_dir / "output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         # input 처리
         if args.input is None:
             raise RuntimeError("Missing --input. Provide a local file or URL.")
         if args.input.startswith("http"):
-            video_path = os.path.join(OUTPUT_DIR, "target_motion.mp4")
+            video_path = os.path.join(output_dir, "target_motion.mp4")
             download_video(args.input, video_path)
         else:
             video_path = args.input
@@ -86,7 +92,7 @@ if __name__ == "__main__":
 
 
         # 그리드 이미지 생성
-        grid_img = create_frame_grid(video_path)
+        grid_img = create_frame_grid(video_path, output_dir=str(output_dir))
         encoded_grid = encode_image_base64(grid_img)
 
         # SUS 파이프라인 실행
@@ -95,7 +101,7 @@ if __name__ == "__main__":
         final_report = sus_gen.generate_sus_prompt(encoded_grid)
 
         # 결과 저장
-        report_path = args.output or os.path.join(OUTPUT_DIR, "final_sus_report.txt")
+        report_path = args.output or os.path.join(output_dir, "final_sus_report.txt")
         with open(report_path, "w", encoding='utf-8') as f:
             f.write(final_report)
 

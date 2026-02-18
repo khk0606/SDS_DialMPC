@@ -325,7 +325,7 @@ def write_text(path: Path, text: str) -> None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default="output/final_sus_report.txt")
-    parser.add_argument("--output", default="output/sds_reward_function.py")
+    parser.add_argument("--output", default="dial-mpc/dial_mpc/envs/sds_reward_function.py")
     parser.add_argument("--spec-out", default="output/motion_spec.json")
     parser.add_argument("--model", default="gemini-2.5-flash")
     parser.add_argument("--no-api", action="store_true")
