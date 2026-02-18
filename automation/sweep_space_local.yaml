@@ -1,0 +1,63 @@
+seed:
+  dist: int_uniform
+  min: 0
+  max: 1000000
+
+# Keep gait fixed first. Expand later only after stable walk is found.
+gait: walk
+
+# Effective target speed knob (default_vx is mostly ignored when fixed_vel_tar is set).
+fixed_vel_tar:
+  dist: choice
+  values:
+    - [0.16, 0.0, 0.0]
+    - [0.18, 0.0, 0.0]
+    - [0.20, 0.0, 0.0]
+    - [0.22, 0.0, 0.0]
+
+startup_hold_sec:
+  dist: uniform
+  min: 2.0
+  max: 3.0
+ramp_up_time:
+  dist: uniform
+  min: 12.0
+  max: 18.0
+
+reward:
+  target_base_height:
+    dist: uniform
+    min: 0.285
+    max: 0.315
+  reward_vel_x_w:
+    dist: loguniform
+    min: 1.0
+    max: 2.2
+  reward_upright_w:
+    dist: loguniform
+    min: 1.2
+    max: 2.2
+  reward_height_w:
+    dist: loguniform
+    min: 1.0
+    max: 1.8
+  penalty_joint_vel_w:
+    dist: loguniform
+    min: 0.0008
+    max: 0.003
+  penalty_energy_w:
+    dist: loguniform
+    min: 0.0002
+    max: 0.001
+  penalty_collapse_w:
+    dist: loguniform
+    min: 6.0
+    max: 12.0
+  penalty_rear_up_w:
+    dist: loguniform
+    min: 8.0
+    max: 18.0
+  penalty_standstill_w:
+    dist: loguniform
+    min: 0.2
+    max: 0.8
