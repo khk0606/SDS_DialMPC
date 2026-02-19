@@ -1,0 +1,96 @@
+seed:
+  dist: int_uniform
+  min: 0
+  max: 1000000
+
+# Stability-first local sweep:
+# 1) keep gait fixed
+# 2) start from slower target speed
+# 3) tune controller gains and key reward terms near base config
+gait: walk
+
+fixed_vel_tar:
+  dist: choice
+  values:
+    - [0.06, 0.0, 0.0]
+    - [0.08, 0.0, 0.0]
+    - [0.10, 0.0, 0.0]
+    - [0.12, 0.0, 0.0]
+    - [0.14, 0.0, 0.0]
+
+startup_hold_sec:
+  dist: uniform
+  min: 2.2
+  max: 3.5
+ramp_up_time:
+  dist: uniform
+  min: 14.0
+  max: 24.0
+
+# Controller gains
+kp:
+  dist: uniform
+  min: 2.6
+  max: 4.2
+kd:
+  dist: uniform
+  min: 2.8
+  max: 4.4
+action_scale:
+  dist: uniform
+  min: 0.010
+  max: 0.025
+
+reward:
+  target_base_height:
+    dist: uniform
+    min: 0.295
+    max: 0.325
+  reward_gaits_w:
+    dist: loguniform
+    min: 0.08
+    max: 0.25
+  reward_air_time_w:
+    dist: loguniform
+    min: 0.005
+    max: 0.03
+  reward_vel_x_w:
+    dist: loguniform
+    min: 0.8
+    max: 2.2
+  reward_upright_w:
+    dist: loguniform
+    min: 1.8
+    max: 4.5
+  reward_height_w:
+    dist: loguniform
+    min: 1.2
+    max: 3.0
+  penalty_joint_pose_w:
+    dist: loguniform
+    min: 0.05
+    max: 0.6
+  penalty_joint_vel_w:
+    dist: loguniform
+    min: 0.001
+    max: 0.005
+  penalty_energy_w:
+    dist: loguniform
+    min: 0.0003
+    max: 0.002
+  penalty_vertical_vel_w:
+    dist: loguniform
+    min: 0.8
+    max: 1.8
+  penalty_collapse_w:
+    dist: loguniform
+    min: 10.0
+    max: 25.0
+  penalty_rear_up_w:
+    dist: loguniform
+    min: 15.0
+    max: 35.0
+  penalty_standstill_w:
+    dist: loguniform
+    min: 0.5
+    max: 2.0
