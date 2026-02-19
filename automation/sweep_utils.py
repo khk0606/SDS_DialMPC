@@ -27,6 +27,7 @@ DEFAULT_METRIC_FIELDS = [
     "mean_forward_speed_mps",
     "forward_motion_ratio",
     "expected_gait",
+    "foot_contact_source",
     "predicted_gait",
     "predicted_gait_confidence",
     "gait_match_score",

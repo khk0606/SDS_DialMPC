@@ -87,6 +87,7 @@ class DialSim:
         self.foot_radius = 0.0175
         self.foot_contact_eps = 1e-3
         self.foot_site_names = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
+        self.foot_geom_names = ("FL", "FR", "RL", "RR")
 
         self.mj_model = mujoco.MjModel.from_xml_path(
             get_model_path(sim_config.robot_name, sim_config.scene_name).as_posix()
@@ -130,6 +131,12 @@ class DialSim:
                 self.ctrl_low = ctrl_low
                 self.ctrl_high = ctrl_high
         self.foot_site_ids = self._resolve_foot_site_ids()
+        self.foot_geom_ids = self._resolve_foot_geom_ids()
+        self.foot_contact_source = "none"
+        if self.foot_site_ids.size == 4:
+            self.foot_contact_source = "site"
+        elif self.foot_geom_ids.size == 4:
+            self.foot_contact_source = "geom"
         self.foot_contact_history = []
 
         # publisher
@@ -171,6 +178,25 @@ class DialSim:
             site_ids.append(sid)
         return np.asarray(site_ids, dtype=np.int32)
 
+    def _resolve_foot_geom_ids(self) -> np.ndarray:
+        geom_ids = []
+        for name in self.foot_geom_names:
+            try:
+                gid = int(mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_GEOM.value, name))
+            except Exception:
+                gid = -1
+            if gid < 0:
+                return np.zeros((0,), dtype=np.int32)
+            geom_ids.append(gid)
+        return np.asarray(geom_ids, dtype=np.int32)
+
+    def _get_foot_z(self) -> np.ndarray | None:
+        if self.foot_site_ids.size == 4:
+            return np.asarray(self.mj_data.site_xpos[self.foot_site_ids, 2], dtype=np.float64)
+        if self.foot_geom_ids.size == 4:
+            return np.asarray(self.mj_data.geom_xpos[self.foot_geom_ids, 2], dtype=np.float64)
+        return None
+
     def _safe_position_cmd(self, target):
         cmd = np.asarray(target, dtype=np.float32).copy()
 
@@ -187,8 +213,8 @@ class DialSim:
 
     def _append_record(self):
         self.data.append(np.concatenate([[self.t], self.mj_data.qpos, self.mj_data.qvel, self.mj_data.ctrl]))
-        if self.foot_site_ids.size == 4:
-            foot_z = np.asarray(self.mj_data.site_xpos[self.foot_site_ids, 2], dtype=np.float64)
+        foot_z = self._get_foot_z()
+        if foot_z is not None:
             foot_contact = (foot_z - self.foot_radius) < self.foot_contact_eps
             self.foot_contact_history.append(foot_contact.astype(np.float64))
 
@@ -350,6 +376,7 @@ class DialSim:
                 "mean_forward_speed_mps": 0.0,
                 "forward_motion_ratio": 0.0,
                 "expected_gait": self.expected_gait,
+                "foot_contact_source": self.foot_contact_source,
                 "predicted_gait": "unknown",
                 "predicted_gait_confidence": 0.0,
                 "gait_match_score": 0.0,
@@ -469,6 +496,7 @@ class DialSim:
             "mean_forward_speed_mps": mean_forward_speed_mps,
             "forward_motion_ratio": forward_motion_ratio,
             "expected_gait": self.expected_gait,
+            "foot_contact_source": self.foot_contact_source,
             **gait_metrics,
             "contact_match_score": contact_match_score,
             "energy": energy,

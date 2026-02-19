@@ -64,10 +64,11 @@ def classify_metrics(
         expected_gait = "pace"
     if predicted_gait == "pacing":
         predicted_gait = "pace"
+    foot_contact_source = str(metrics.get("foot_contact_source", "") or "").strip().lower()
     has_forward_metrics = any(
         key in metrics for key in ("forward_progress_m", "mean_forward_speed_mps", "forward_motion_ratio")
     )
-    has_gait_metrics = any(key in metrics for key in ("gait_match_score", "predicted_gait"))
+    has_gait_metrics = foot_contact_source in {"site", "geom"}
 
     if not success:
         if 0.0 <= fall_time_sec < early_fall_sec:
