@@ -282,6 +282,32 @@ class DialSim:
         corr = float(np.dot(aa, bb) / den)
         return float(np.clip(corr, -1.0, 1.0))
 
+    @staticmethod
+    def _body_forward_velocity(quat_wxyz: np.ndarray, vel_world_xyz: np.ndarray) -> np.ndarray:
+        if quat_wxyz.ndim != 2 or vel_world_xyz.ndim != 2:
+            return np.zeros((0,), dtype=np.float64)
+        if quat_wxyz.shape[0] != vel_world_xyz.shape[0]:
+            return np.zeros((0,), dtype=np.float64)
+        if quat_wxyz.shape[1] < 4 or vel_world_xyz.shape[1] < 3:
+            return np.zeros((0,), dtype=np.float64)
+
+        q = np.asarray(quat_wxyz[:, :4], dtype=np.float64)
+        q_norm = np.linalg.norm(q, axis=1, keepdims=True)
+        q_norm = np.where(q_norm > 1e-9, q_norm, 1.0)
+        q = q / q_norm
+        w = q[:, 0]
+        x = q[:, 1]
+        y = q[:, 2]
+        z = q[:, 3]
+
+        # First column of body->world rotation matrix.
+        r11 = 1.0 - 2.0 * (y * y + z * z)
+        r21 = 2.0 * (x * y + w * z)
+        r31 = 2.0 * (x * z - w * y)
+
+        v = np.asarray(vel_world_xyz[:, :3], dtype=np.float64)
+        return v[:, 0] * r11 + v[:, 1] * r21 + v[:, 2] * r31
+
     def _infer_gait_metrics(self) -> dict:
         default_score = 0.5 if self.expected_gait else 1.0
         default = {
@@ -428,21 +454,30 @@ class DialSim:
 
         target_vx, target_wz, target_height = self._extract_targets()
 
-        actual_vx = qvel[:, 0] if nv > 0 else np.zeros(data.shape[0], dtype=np.float64)
+        actual_vx_world = qvel[:, 0] if nv > 0 else np.zeros(data.shape[0], dtype=np.float64)
         actual_wz = qvel[:, 5] if nv > 5 else np.zeros(data.shape[0], dtype=np.float64)
-        mean_vel_error = float(np.mean(np.abs(actual_vx - target_vx)))
+        if nq >= 7 and nv >= 3:
+            body_vx = self._body_forward_velocity(qpos[:, 3:7], qvel[:, :3])
+        else:
+            body_vx = actual_vx_world
+        if body_vx.size != data.shape[0]:
+            body_vx = actual_vx_world
+
+        mean_vel_error = float(np.mean(np.abs(body_vx - target_vx)))
         yaw_rate_error = float(np.mean(np.abs(actual_wz - target_wz)))
         mean_height_error = float(np.mean(np.abs(base_z - target_height)))
-        base_x = qpos[:, 0] if nq > 0 else np.zeros(data.shape[0], dtype=np.float64)
-        forward_progress_m = float(base_x[-1] - base_x[0]) if base_x.size > 0 else 0.0
+        if t_series.size >= 2:
+            forward_progress_m = float(np.trapz(body_vx, t_series))
+        else:
+            forward_progress_m = float(body_vx[0] * self.sim_dt) if body_vx.size > 0 else 0.0
         sim_span = max(float(t_series[-1] - t_series[0]), self.sim_dt)
         mean_forward_speed_mps = float(forward_progress_m / sim_span)
         if abs(target_vx) > 1e-6:
             dir_sign = np.sign(target_vx)
             speed_thr = max(0.02, 0.2 * abs(target_vx))
-            forward_motion_ratio = float(np.mean((actual_vx * dir_sign) > speed_thr))
+            forward_motion_ratio = float(np.mean((body_vx * dir_sign) > speed_thr))
         else:
-            forward_motion_ratio = float(np.mean(np.abs(actual_vx) < 0.05))
+            forward_motion_ratio = float(np.mean(np.abs(body_vx) < 0.05))
         gait_metrics = self._infer_gait_metrics()
         contact_match_score = float(gait_metrics.get("contact_match_score", 0.5))
 
