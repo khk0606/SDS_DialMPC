@@ -1,0 +1,100 @@
+seed:
+  dist: int_uniform
+  min: 0
+  max: 1000000
+
+# v3: stability-first (targeting "stable_good")
+gait: walk
+
+# Start from very low forward targets and expand only if stable.
+fixed_vel_tar:
+  dist: choice
+  values:
+    - [0.04, 0.0, 0.0]
+    - [0.06, 0.0, 0.0]
+    - [0.08, 0.0, 0.0]
+    - [0.10, 0.0, 0.0]
+    - [0.12, 0.0, 0.0]
+
+startup_hold_sec:
+  dist: uniform
+  min: 2.8
+  max: 4.2
+ramp_up_time:
+  dist: uniform
+  min: 18.0
+  max: 30.0
+
+# Reduce command aggressiveness, add damping.
+kp:
+  dist: uniform
+  min: 2.4
+  max: 3.6
+kd:
+  dist: uniform
+  min: 3.4
+  max: 5.2
+action_scale:
+  dist: uniform
+  min: 0.006
+  max: 0.018
+
+reward:
+  target_base_height:
+    dist: uniform
+    min: 0.300
+    max: 0.330
+
+  # Keep velocity objective moderate to avoid unstable forward push.
+  reward_vel_x_w:
+    dist: loguniform
+    min: 0.4
+    max: 1.2
+  reward_upright_w:
+    dist: loguniform
+    min: 3.0
+    max: 8.0
+  reward_height_w:
+    dist: loguniform
+    min: 2.0
+    max: 5.0
+
+  reward_gaits_w:
+    dist: loguniform
+    min: 0.06
+    max: 0.20
+  reward_air_time_w:
+    dist: loguniform
+    min: 0.003
+    max: 0.02
+
+  penalty_joint_pose_w:
+    dist: loguniform
+    min: 0.08
+    max: 0.9
+  penalty_joint_vel_w:
+    dist: loguniform
+    min: 0.002
+    max: 0.010
+  penalty_energy_w:
+    dist: loguniform
+    min: 0.0006
+    max: 0.004
+  penalty_vertical_vel_w:
+    dist: loguniform
+    min: 1.6
+    max: 4.0
+  penalty_collapse_w:
+    dist: loguniform
+    min: 20.0
+    max: 50.0
+  penalty_rear_up_w:
+    dist: loguniform
+    min: 30.0
+    max: 80.0
+
+  # Too large value may force unstable acceleration.
+  penalty_standstill_w:
+    dist: loguniform
+    min: 0.05
+    max: 0.60
