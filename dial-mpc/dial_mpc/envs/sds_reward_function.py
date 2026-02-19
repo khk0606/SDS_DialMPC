@@ -58,6 +58,10 @@ def compute_sds_reward(pipeline_state, state_info, env):
 
     euler = math.quat_to_euler(rot)
     pitch = euler[1]
+    pitch_ref = jnp.array(getattr(env, "_home_pitch", 0.0), dtype=pitch.dtype)
+    # Use wrapped angular deviation from the home pose so we don't
+    # penalize a model-specific static pitch offset.
+    pitch_dev = jnp.abs(jnp.atan2(jnp.sin(pitch - pitch_ref), jnp.cos(pitch - pitch_ref)))
 
     # keep original reward blocks, adjust weights/targets for slow walk
     pos_tar = state_info["pos_tar"] + state_info["vel_tar"] * env.dt * state_info["step"]
@@ -88,7 +92,7 @@ def compute_sds_reward(pipeline_state, state_info, env):
 
     penalty_vertical_vel = jnp.square(vb[2])
     penalty_collapse = jnp.square(jnp.clip(0.24 - pos[2], 0.0, 1.0))
-    penalty_rear_up = jnp.square(jnp.clip(pitch - 0.18, 0.0, 1.0))
+    penalty_rear_up = jnp.square(jnp.clip(pitch_dev - 0.18, 0.0, 1.0))
     penalty_standstill = jnp.square(jnp.clip(target_vx - vb[0], 0.0, 10.0))
     penalty_all_feet_air = jnp.where(jnp.min(foot_contact_z) > 0.01, 1.0, 0.0)
 

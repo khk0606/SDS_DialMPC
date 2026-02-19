@@ -17,6 +17,9 @@ DEFAULT_METRIC_FIELDS = [
     "fall_count",
     "mean_roll",
     "mean_pitch",
+    "mean_roll_dev",
+    "mean_pitch_dev",
+    "max_pitch_dev",
     "mean_height_error",
     "mean_vel_error",
     "yaw_rate_error",
@@ -183,7 +186,14 @@ def compute_score(metrics: Mapping[str, Any], policy_rules: Mapping[str, Any] | 
         return score
 
     for key, weight in weights.items():
-        score += to_float(weight) * to_float(metrics.get(key, 0.0))
+        # For attitude terms, prefer deviation-based metrics when present.
+        if key == "mean_roll" and "mean_roll_dev" in metrics:
+            val = metrics.get("mean_roll_dev", 0.0)
+        elif key == "mean_pitch" and "mean_pitch_dev" in metrics:
+            val = metrics.get("mean_pitch_dev", 0.0)
+        else:
+            val = metrics.get(key, 0.0)
+        score += to_float(weight) * to_float(val, 0.0)
     return score
 
 

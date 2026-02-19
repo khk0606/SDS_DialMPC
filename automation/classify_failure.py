@@ -42,8 +42,9 @@ def classify_metrics(
             "confidence": 0.85,
         }
 
-    mean_roll = abs(to_float(metrics.get("mean_roll", 0.0)))
-    mean_pitch = abs(to_float(metrics.get("mean_pitch", 0.0)))
+    # Prefer pose-deviation metrics when available.
+    mean_roll = abs(to_float(metrics.get("mean_roll_dev", metrics.get("mean_roll", 0.0))))
+    mean_pitch = abs(to_float(metrics.get("mean_pitch_dev", metrics.get("mean_pitch", 0.0))))
     fall_time_sec = to_float(metrics.get("fall_time_sec", -1.0))
     mean_vel_error = to_float(metrics.get("mean_vel_error", 0.0))
     contact_match_score = to_float(metrics.get("contact_match_score", 1.0))

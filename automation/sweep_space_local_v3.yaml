@@ -39,6 +39,17 @@ action_scale:
   min: 0.006
   max: 0.018
 
+# Planner clamp knobs (open up action sequence flexibility).
+planner_enable_joint_clamp: true
+planner_max_joint_delta:
+  dist: uniform
+  min: 0.010
+  max: 0.050
+planner_max_seq_delta:
+  dist: uniform
+  min: 0.008
+  max: 0.045
+
 reward:
   target_base_height:
     dist: uniform

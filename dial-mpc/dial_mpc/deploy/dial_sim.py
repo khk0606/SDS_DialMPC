@@ -99,18 +99,30 @@ class DialSim:
         self.Nu = self.mj_model.nu
         self.default_q = self.mj_model.keyframe("home").qpos
         self.default_u = self.mj_model.keyframe("home").ctrl
+        self.home_roll = 0.0
+        self.home_pitch = 0.0
+        if self.default_q.shape[0] >= 7:
+            home_quat = np.asarray(self.default_q[3:7], dtype=np.float64).reshape(1, 4)
+            hr, hp = self._roll_pitch_from_quat(home_quat)
+            self.home_roll = float(hr[0])
+            self.home_pitch = float(hp[0])
 
         # position cmd smoothing (prevents start spike)
         self.enable_cmd_slew = True
         self.cmd_slew_step = 0.02
         self.prev_pos_cmd = self.default_q[7 : 7 + self.Nu].copy()
 
+        self.ctrl_low = None
+        self.ctrl_high = None
         if self.mj_model.actuator_ctrlrange.shape[0] == self.Nu:
-            self.ctrl_low = self.mj_model.actuator_ctrlrange[:, 0].copy()
-            self.ctrl_high = self.mj_model.actuator_ctrlrange[:, 1].copy()
-        else:
-            self.ctrl_low = None
-            self.ctrl_high = None
+            ctrl_low = self.mj_model.actuator_ctrlrange[:, 0].copy()
+            ctrl_high = self.mj_model.actuator_ctrlrange[:, 1].copy()
+            ctrl_span = np.abs(ctrl_high - ctrl_low)
+            # Some models expose [0, 0] ctrlrange for all actuators when limits are not used.
+            # In that case clipping would collapse all commands to zero.
+            if np.any(ctrl_span > 1e-9):
+                self.ctrl_low = ctrl_low
+                self.ctrl_high = ctrl_high
 
         # publisher
         self.time_shm = shared_memory.SharedMemory(name="time_shm", create=True, size=32)
@@ -203,6 +215,11 @@ class DialSim:
         pitch = np.arcsin(sinp)
         return roll, pitch
 
+    @staticmethod
+    def _angle_dev(angle: np.ndarray, ref: float) -> np.ndarray:
+        diff = angle - ref
+        return np.arctan2(np.sin(diff), np.cos(diff))
+
     def compute_metrics(self) -> dict:
         if len(self.data) == 0:
             return {
@@ -244,9 +261,17 @@ class DialSim:
             roll, pitch = self._roll_pitch_from_quat(quat)
             mean_roll = float(np.mean(np.abs(roll)))
             mean_pitch = float(np.mean(np.abs(pitch)))
+            roll_dev = self._angle_dev(roll, self.home_roll)
+            pitch_dev = self._angle_dev(pitch, self.home_pitch)
+            mean_roll_dev = float(np.mean(np.abs(roll_dev)))
+            mean_pitch_dev = float(np.mean(np.abs(pitch_dev)))
+            max_pitch_dev = float(np.max(np.abs(pitch_dev)))
         else:
             mean_roll = 0.0
             mean_pitch = 0.0
+            mean_roll_dev = 0.0
+            mean_pitch_dev = 0.0
+            max_pitch_dev = 0.0
 
         target_vx, target_wz, target_height = self._extract_targets()
 
@@ -294,6 +319,9 @@ class DialSim:
             "fall_count": fall_count,
             "mean_roll": mean_roll,
             "mean_pitch": mean_pitch,
+            "mean_roll_dev": mean_roll_dev,
+            "mean_pitch_dev": mean_pitch_dev,
+            "max_pitch_dev": max_pitch_dev,
             "mean_height_error": mean_height_error,
             "mean_vel_error": mean_vel_error,
             "yaw_rate_error": yaw_rate_error,

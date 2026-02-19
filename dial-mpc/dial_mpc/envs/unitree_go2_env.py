@@ -37,6 +37,10 @@ class UnitreeGo2EnvConfig(BaseEnvConfig):
     gait: str = "trot"
     # Optional reward parameters loaded from YAML under `reward: {...}`.
     reward: Union[Dict[str, float], None] = None
+    # Planner output clamp knobs (consumed in deploy/dial_plan.py).
+    planner_enable_joint_clamp: bool = True
+    planner_max_joint_delta: float = 0.012
+    planner_max_seq_delta: float = 0.010
 
 
 class UnitreeGo2Env(BaseEnv):
@@ -68,6 +72,7 @@ class UnitreeGo2Env(BaseEnv):
 
         self._init_q = jnp.array(self.sys.mj_model.keyframe("home").qpos)
         self._default_pose = self.sys.mj_model.keyframe("home").qpos[7:]
+        self._home_pitch = float(math.quat_to_euler(self._init_q[3:7])[1])
 
         self.joint_range = jnp.array(
             [

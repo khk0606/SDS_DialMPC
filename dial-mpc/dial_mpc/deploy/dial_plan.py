@@ -84,9 +84,9 @@ class MBDPublisher:
         )
 
         self._q_home = jnp.array(self.default_q[7:7 + self.nu])
-        self.enable_joint_clamp = True
-        self.max_joint_delta = 0.012
-        self.max_seq_delta = 0.010
+        self.enable_joint_clamp = bool(getattr(self.env_config, "planner_enable_joint_clamp", True))
+        self.max_joint_delta = float(getattr(self.env_config, "planner_max_joint_delta", 0.012))
+        self.max_seq_delta = float(getattr(self.env_config, "planner_max_seq_delta", 0.010))
         self._jt_prev = jnp.array(self.default_q[7:7 + self.nu])
 
         self._debug_counter = 0
