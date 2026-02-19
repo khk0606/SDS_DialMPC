@@ -81,6 +81,12 @@ class DialSim:
         self.stop_reason = "running"
         self.sim_exception: str | None = None
         self.config_dict = dict(config_dict or {})
+        self.expected_gait = str(self.config_dict.get("gait", "") or "").strip().lower()
+        if self.expected_gait == "pacing":
+            self.expected_gait = "pace"
+        self.foot_radius = 0.0175
+        self.foot_contact_eps = 1e-3
+        self.foot_site_names = ("FL_foot", "FR_foot", "RL_foot", "RR_foot")
 
         self.mj_model = mujoco.MjModel.from_xml_path(
             get_model_path(sim_config.robot_name, sim_config.scene_name).as_posix()
@@ -123,6 +129,8 @@ class DialSim:
             if np.any(ctrl_span > 1e-9):
                 self.ctrl_low = ctrl_low
                 self.ctrl_high = ctrl_high
+        self.foot_site_ids = self._resolve_foot_site_ids()
+        self.foot_contact_history = []
 
         # publisher
         self.time_shm = shared_memory.SharedMemory(name="time_shm", create=True, size=32)
@@ -151,6 +159,18 @@ class DialSim:
         self.tau_shared = np.ndarray((self.n_acts, self.mj_model.nu), dtype=np.float32, buffer=self.tau_shm.buf)
         self.tau_shared[:] = 0.0
 
+    def _resolve_foot_site_ids(self) -> np.ndarray:
+        site_ids = []
+        for name in self.foot_site_names:
+            try:
+                sid = int(mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SITE.value, name))
+            except Exception:
+                sid = -1
+            if sid < 0:
+                return np.zeros((0,), dtype=np.int32)
+            site_ids.append(sid)
+        return np.asarray(site_ids, dtype=np.int32)
+
     def _safe_position_cmd(self, target):
         cmd = np.asarray(target, dtype=np.float32).copy()
 
@@ -167,6 +187,10 @@ class DialSim:
 
     def _append_record(self):
         self.data.append(np.concatenate([[self.t], self.mj_data.qpos, self.mj_data.qvel, self.mj_data.ctrl]))
+        if self.foot_site_ids.size == 4:
+            foot_z = np.asarray(self.mj_data.site_xpos[self.foot_site_ids, 2], dtype=np.float64)
+            foot_contact = (foot_z - self.foot_radius) < self.foot_contact_eps
+            self.foot_contact_history.append(foot_contact.astype(np.float64))
 
     def _should_stop(self) -> tuple[bool, str]:
         if self.max_steps > 0 and self.step_count >= self.max_steps:
@@ -220,6 +244,96 @@ class DialSim:
         diff = angle - ref
         return np.arctan2(np.sin(diff), np.cos(diff))
 
+    @staticmethod
+    def _safe_corr(a: np.ndarray, b: np.ndarray) -> float:
+        if a.size == 0 or b.size == 0 or a.size != b.size:
+            return 0.0
+        aa = np.asarray(a, dtype=np.float64) - float(np.mean(a))
+        bb = np.asarray(b, dtype=np.float64) - float(np.mean(b))
+        den = np.sqrt(float(np.dot(aa, aa)) * float(np.dot(bb, bb)))
+        if den <= 1e-9:
+            return 0.0
+        corr = float(np.dot(aa, bb) / den)
+        return float(np.clip(corr, -1.0, 1.0))
+
+    def _infer_gait_metrics(self) -> dict:
+        default_score = 0.5 if self.expected_gait else 1.0
+        default = {
+            "predicted_gait": "unknown",
+            "predicted_gait_confidence": 0.0,
+            "gait_match_score": default_score,
+            "gait_diag_sync": 0.0,
+            "gait_lateral_sync": 0.0,
+            "gait_front_sync": 0.0,
+            "gait_hind_sync": 0.0,
+            "gait_switches_per_sec": 0.0,
+            "contact_match_score": default_score,
+        }
+        if len(self.foot_contact_history) < 8:
+            return default
+
+        contact = np.asarray(self.foot_contact_history, dtype=np.float64)
+        if contact.ndim != 2 or contact.shape[1] != 4:
+            return default
+
+        fl = contact[:, 0]
+        fr = contact[:, 1]
+        rl = contact[:, 2]
+        rr = contact[:, 3]
+
+        diag_sync = 0.5 * (self._safe_corr(fl, rr) + self._safe_corr(fr, rl))
+        lateral_sync = 0.5 * (self._safe_corr(fl, rl) + self._safe_corr(fr, rr))
+        front_sync = self._safe_corr(fl, fr)
+        hind_sync = self._safe_corr(rl, rr)
+
+        switches = np.sum(np.abs(np.diff(contact, axis=0)) > 0.5, axis=0)
+        duration = max(float(self.t), 1e-6)
+        switches_per_sec = float(np.mean(switches) / duration)
+
+        max_sync = max(diag_sync, lateral_sync, front_sync, hind_sync)
+        if switches_per_sec < 0.2:
+            predicted_gait = "stand"
+            confidence = 0.9
+        elif diag_sync > 0.30 and diag_sync > lateral_sync + 0.12:
+            predicted_gait = "trot"
+            confidence = float(np.clip(0.55 + 0.45 * (diag_sync - lateral_sync), 0.0, 1.0))
+        elif lateral_sync > 0.30 and lateral_sync > diag_sync + 0.12:
+            predicted_gait = "pace"
+            confidence = float(np.clip(0.55 + 0.45 * (lateral_sync - diag_sync), 0.0, 1.0))
+        elif switches_per_sec >= 0.5 and max_sync < 0.45:
+            predicted_gait = "walk"
+            confidence = float(np.clip(0.50 + 0.50 * (0.45 - max_sync), 0.0, 1.0))
+        else:
+            predicted_gait = "mixed"
+            confidence = float(np.clip(0.45 + 0.25 * (1.0 - abs(diag_sync - lateral_sync)), 0.0, 1.0))
+
+        expected = self.expected_gait
+        if expected == "walk":
+            gait_match_score = 1.0 - max(diag_sync, lateral_sync)
+        elif expected == "trot":
+            gait_match_score = 0.5 + 0.5 * (diag_sync - lateral_sync)
+        elif expected == "pace":
+            gait_match_score = 0.5 + 0.5 * (lateral_sync - diag_sync)
+        elif expected in {"stand", ""}:
+            gait_match_score = 0.5 + 0.5 * confidence
+        else:
+            gait_match_score = 0.5
+        gait_match_score = float(np.clip(gait_match_score, 0.0, 1.0))
+        if expected and predicted_gait == expected:
+            gait_match_score = max(gait_match_score, float(np.clip(0.75 + 0.25 * confidence, 0.0, 1.0)))
+
+        return {
+            "predicted_gait": predicted_gait,
+            "predicted_gait_confidence": confidence,
+            "gait_match_score": gait_match_score,
+            "gait_diag_sync": diag_sync,
+            "gait_lateral_sync": lateral_sync,
+            "gait_front_sync": front_sync,
+            "gait_hind_sync": hind_sync,
+            "gait_switches_per_sec": switches_per_sec,
+            "contact_match_score": gait_match_score,
+        }
+
     def compute_metrics(self) -> dict:
         if len(self.data) == 0:
             return {
@@ -232,7 +346,19 @@ class DialSim:
                 "mean_height_error": 0.0,
                 "mean_vel_error": 0.0,
                 "yaw_rate_error": 0.0,
-                "contact_match_score": 1.0,
+                "forward_progress_m": 0.0,
+                "mean_forward_speed_mps": 0.0,
+                "forward_motion_ratio": 0.0,
+                "expected_gait": self.expected_gait,
+                "predicted_gait": "unknown",
+                "predicted_gait_confidence": 0.0,
+                "gait_match_score": 0.0,
+                "gait_diag_sync": 0.0,
+                "gait_lateral_sync": 0.0,
+                "gait_front_sync": 0.0,
+                "gait_hind_sync": 0.0,
+                "gait_switches_per_sec": 0.0,
+                "contact_match_score": 0.0,
                 "energy": 0.0,
                 "episode_return": -1e6,
                 "steps": int(self.step_count),
@@ -280,6 +406,18 @@ class DialSim:
         mean_vel_error = float(np.mean(np.abs(actual_vx - target_vx)))
         yaw_rate_error = float(np.mean(np.abs(actual_wz - target_wz)))
         mean_height_error = float(np.mean(np.abs(base_z - target_height)))
+        base_x = qpos[:, 0] if nq > 0 else np.zeros(data.shape[0], dtype=np.float64)
+        forward_progress_m = float(base_x[-1] - base_x[0]) if base_x.size > 0 else 0.0
+        sim_span = max(float(t_series[-1] - t_series[0]), self.sim_dt)
+        mean_forward_speed_mps = float(forward_progress_m / sim_span)
+        if abs(target_vx) > 1e-6:
+            dir_sign = np.sign(target_vx)
+            speed_thr = max(0.02, 0.2 * abs(target_vx))
+            forward_motion_ratio = float(np.mean((actual_vx * dir_sign) > speed_thr))
+        else:
+            forward_motion_ratio = float(np.mean(np.abs(actual_vx) < 0.05))
+        gait_metrics = self._infer_gait_metrics()
+        contact_match_score = float(gait_metrics.get("contact_match_score", 0.5))
 
         if nv > 6:
             joint_vel = qvel[:, 6 : 6 + self.Nu]
@@ -308,6 +446,8 @@ class DialSim:
                 5.0 * mean_vel_error
                 + 2.0 * mean_height_error
                 + 0.5 * (mean_roll + mean_pitch)
+                - 0.5 * forward_progress_m
+                - 0.5 * contact_match_score
                 + 0.01 * energy
             )
         )
@@ -325,7 +465,12 @@ class DialSim:
             "mean_height_error": mean_height_error,
             "mean_vel_error": mean_vel_error,
             "yaw_rate_error": yaw_rate_error,
-            "contact_match_score": 1.0,
+            "forward_progress_m": forward_progress_m,
+            "mean_forward_speed_mps": mean_forward_speed_mps,
+            "forward_motion_ratio": forward_motion_ratio,
+            "expected_gait": self.expected_gait,
+            **gait_metrics,
+            "contact_match_score": contact_match_score,
             "energy": energy,
             "episode_return": episode_return,
             "steps": int(self.step_count),

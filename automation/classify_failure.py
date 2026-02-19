@@ -22,6 +22,11 @@ def classify_metrics(
     contact_thr = to_float(cls.get("wrong_gait_contact_score", 0.65))
     standstill_vel_error = to_float(cls.get("standstill_vel_error", 0.30))
     high_energy_thr = cls.get("high_energy_threshold")
+    min_forward_progress_m = to_float(cls.get("min_forward_progress_m", 0.20))
+    min_forward_speed_mps = to_float(cls.get("min_forward_speed_mps", 0.03))
+    min_forward_motion_ratio = to_float(cls.get("min_forward_motion_ratio", 0.55))
+    gait_match_score_thr = to_float(cls.get("gait_match_score_thr", 0.60))
+    enforce_gait_match = parse_bool(cls.get("enforce_gait_match", True))
 
     rc = int(to_float(metrics.get("returncode", 0)))
     success = parse_bool(metrics.get("success", False))
@@ -49,6 +54,20 @@ def classify_metrics(
     mean_vel_error = to_float(metrics.get("mean_vel_error", 0.0))
     contact_match_score = to_float(metrics.get("contact_match_score", 1.0))
     energy = to_float(metrics.get("energy", 0.0))
+    forward_progress_m = to_float(metrics.get("forward_progress_m", 0.0))
+    mean_forward_speed_mps = to_float(metrics.get("mean_forward_speed_mps", 0.0))
+    forward_motion_ratio = to_float(metrics.get("forward_motion_ratio", 0.0))
+    gait_match_score = to_float(metrics.get("gait_match_score", contact_match_score))
+    expected_gait = str(metrics.get("expected_gait", "") or "").strip().lower()
+    predicted_gait = str(metrics.get("predicted_gait", "") or "").strip().lower()
+    if expected_gait == "pacing":
+        expected_gait = "pace"
+    if predicted_gait == "pacing":
+        predicted_gait = "pace"
+    has_forward_metrics = any(
+        key in metrics for key in ("forward_progress_m", "mean_forward_speed_mps", "forward_motion_ratio")
+    )
+    has_gait_metrics = any(key in metrics for key in ("gait_match_score", "predicted_gait"))
 
     if not success:
         if 0.0 <= fall_time_sec < early_fall_sec:
@@ -67,6 +86,32 @@ def classify_metrics(
             "label": "failure_other",
             "reason": "Failure without explicit subtype.",
             "confidence": 0.5,
+        }
+
+    if has_forward_metrics and (
+        forward_progress_m < min_forward_progress_m
+        or mean_forward_speed_mps < min_forward_speed_mps
+        or forward_motion_ratio < min_forward_motion_ratio
+    ):
+        return {
+            "label": "no_locomotion",
+            "reason": (
+                "Forward locomotion too weak: "
+                f"progress={forward_progress_m:.3f}m, "
+                f"speed={mean_forward_speed_mps:.3f}m/s, "
+                f"motion_ratio={forward_motion_ratio:.3f}."
+            ),
+            "confidence": 0.8,
+        }
+
+    if has_gait_metrics and enforce_gait_match and expected_gait and gait_match_score < gait_match_score_thr:
+        return {
+            "label": "wrong_gait",
+            "reason": (
+                f"gait_match_score={gait_match_score:.3f} < {gait_match_score_thr:.3f} "
+                f"(expected={expected_gait}, predicted={predicted_gait or 'unknown'})."
+            ),
+            "confidence": 0.85,
         }
 
     if contact_match_score < contact_thr:
