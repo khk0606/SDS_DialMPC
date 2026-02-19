@@ -15,35 +15,48 @@ fixed_vel_tar:
 
 startup_hold_sec:
   dist: uniform
-  min: 0.6
-  max: 1.6
+  min: 0.0
+  max: 0.8
 ramp_up_time:
   dist: uniform
-  min: 6.0
-  max: 12.0
+  min: 3.0
+  max: 8.0
 
 action_scale:
   dist: uniform
-  min: 0.020
-  max: 0.030
+  min: 0.024
+  max: 0.040
 kp:
   dist: uniform
-  min: 2.6
+  min: 2.4
   max: 3.4
 kd:
   dist: uniform
-  min: 3.6
-  max: 5.2
+  min: 4.0
+  max: 5.6
 
-planner_enable_joint_clamp: true
+planner_enable_joint_clamp:
+  dist: choice
+  values: [false, true]
 planner_max_joint_delta:
   dist: uniform
-  min: 0.020
-  max: 0.050
+  min: 0.030
+  max: 0.080
 planner_max_seq_delta:
   dist: uniform
-  min: 0.015
-  max: 0.040
+  min: 0.025
+  max: 0.070
+planner_enable_warmstart:
+  dist: choice
+  values: [false, true]
+planner_warmup_min_sec:
+  dist: uniform
+  min: 0.0
+  max: 1.0
+planner_warmup_scale:
+  dist: uniform
+  min: 0.05
+  max: 0.20
 
 reward:
   target_base_height:
@@ -59,23 +72,27 @@ reward:
     dist: loguniform
     min: 0.005
     max: 0.020
+  reward_pos_w:
+    dist: loguniform
+    min: 0.05
+    max: 0.8
   reward_upright_w:
     dist: loguniform
-    min: 2.0
-    max: 6.0
+    min: 1.5
+    max: 5.0
   reward_vel_x_w:
     dist: loguniform
-    min: 2.5
-    max: 8.0
+    min: 4.0
+    max: 12.0
   reward_height_w:
     dist: loguniform
-    min: 1.5
-    max: 4.0
+    min: 1.0
+    max: 3.0
 
   penalty_joint_pose_w:
     dist: loguniform
-    min: 0.05
-    max: 0.30
+    min: 0.01
+    max: 0.15
   penalty_joint_vel_w:
     dist: loguniform
     min: 0.0008
@@ -98,8 +115,8 @@ reward:
     max: 50.0
   penalty_standstill_w:
     dist: loguniform
-    min: 1.0
-    max: 5.0
+    min: 2.0
+    max: 8.0
   penalty_all_feet_air_w:
     dist: loguniform
     min: 2.0

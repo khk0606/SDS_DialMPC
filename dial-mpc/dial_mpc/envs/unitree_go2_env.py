@@ -41,6 +41,9 @@ class UnitreeGo2EnvConfig(BaseEnvConfig):
     planner_enable_joint_clamp: bool = True
     planner_max_joint_delta: float = 0.012
     planner_max_seq_delta: float = 0.010
+    planner_enable_warmstart: bool = True
+    planner_warmup_min_sec: float = 4.0
+    planner_warmup_scale: float = 0.35
 
 
 class UnitreeGo2Env(BaseEnv):

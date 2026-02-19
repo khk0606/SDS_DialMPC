@@ -79,9 +79,12 @@ class MBDPublisher:
         self.startup_hold_sec = float(getattr(self.env_config, "startup_hold_sec", 2.0))
         self._startup_t0 = None
         self._hold_release_t0 = None
+        warmup_min_sec = float(getattr(self.env_config, "planner_warmup_min_sec", 4.0))
+        warmup_scale = float(getattr(self.env_config, "planner_warmup_scale", 0.35))
         self.warmup_sec = max(
-            4.0, float(getattr(self.env_config, "ramp_up_time", 10.0)) * 0.35
+            warmup_min_sec, float(getattr(self.env_config, "ramp_up_time", 10.0)) * warmup_scale
         )
+        self.enable_warmstart = bool(getattr(self.env_config, "planner_enable_warmstart", True))
 
         self._q_home = jnp.array(self.default_q[7:7 + self.nu])
         self.enable_joint_clamp = bool(getattr(self.env_config, "planner_enable_joint_clamp", True))
@@ -324,7 +327,7 @@ class MBDPublisher:
                     self.env.joint_range[:, 1],
                 )
 
-            alpha = self._compute_alpha()
+            alpha = self._compute_alpha() if self.enable_warmstart else 1.0
             jt0 = self._warmstart_blend_jt0(jt_seq[0], alpha)
             jt0 = self._clamp_jt0(jt0)
 

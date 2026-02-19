@@ -7,6 +7,10 @@ score:
     mean_vel_error: -80.0
     mean_roll: -20.0
     mean_pitch: -20.0
+    forward_progress_m: 120.0
+    mean_forward_speed_mps: 200.0
+    forward_motion_ratio: 80.0
+    gait_match_score: 25.0
     energy: -0.2
     contact_match_score: 40.0
 
