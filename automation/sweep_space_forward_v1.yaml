@@ -1,0 +1,106 @@
+seed:
+  dist: int_uniform
+  min: 0
+  max: 1000000
+
+gait: walk
+
+fixed_vel_tar:
+  dist: choice
+  values:
+    - [0.08, 0.0, 0.0]
+    - [0.10, 0.0, 0.0]
+    - [0.12, 0.0, 0.0]
+    - [0.14, 0.0, 0.0]
+
+startup_hold_sec:
+  dist: uniform
+  min: 0.6
+  max: 1.6
+ramp_up_time:
+  dist: uniform
+  min: 6.0
+  max: 12.0
+
+action_scale:
+  dist: uniform
+  min: 0.020
+  max: 0.030
+kp:
+  dist: uniform
+  min: 2.6
+  max: 3.4
+kd:
+  dist: uniform
+  min: 3.6
+  max: 5.2
+
+planner_enable_joint_clamp: true
+planner_max_joint_delta:
+  dist: uniform
+  min: 0.020
+  max: 0.050
+planner_max_seq_delta:
+  dist: uniform
+  min: 0.015
+  max: 0.040
+
+reward:
+  target_base_height:
+    dist: uniform
+    min: 0.295
+    max: 0.315
+
+  reward_gaits_w:
+    dist: loguniform
+    min: 0.10
+    max: 0.30
+  reward_air_time_w:
+    dist: loguniform
+    min: 0.005
+    max: 0.020
+  reward_upright_w:
+    dist: loguniform
+    min: 2.0
+    max: 6.0
+  reward_vel_x_w:
+    dist: loguniform
+    min: 2.5
+    max: 8.0
+  reward_height_w:
+    dist: loguniform
+    min: 1.5
+    max: 4.0
+
+  penalty_joint_pose_w:
+    dist: loguniform
+    min: 0.05
+    max: 0.30
+  penalty_joint_vel_w:
+    dist: loguniform
+    min: 0.0008
+    max: 0.006
+  penalty_energy_w:
+    dist: loguniform
+    min: 0.0004
+    max: 0.003
+  penalty_vertical_vel_w:
+    dist: loguniform
+    min: 1.0
+    max: 3.0
+  penalty_collapse_w:
+    dist: loguniform
+    min: 12.0
+    max: 40.0
+  penalty_rear_up_w:
+    dist: loguniform
+    min: 12.0
+    max: 50.0
+  penalty_standstill_w:
+    dist: loguniform
+    min: 1.0
+    max: 5.0
+  penalty_all_feet_air_w:
+    dist: loguniform
+    min: 2.0
+    max: 5.0
