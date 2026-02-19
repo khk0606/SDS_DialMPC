@@ -360,17 +360,23 @@ class DialSim:
             confidence = float(np.clip(0.45 + 0.25 * (1.0 - abs(diag_sync - lateral_sync)), 0.0, 1.0))
 
         expected = self.expected_gait
+        activity_score = float(np.clip((switches_per_sec - 0.20) / 0.80, 0.0, 1.0))
         if expected == "walk":
-            gait_match_score = 1.0 - max(diag_sync, lateral_sync)
+            pattern_score = 1.0 - max(diag_sync, lateral_sync)
+            gait_match_score = 0.5 * pattern_score + 0.5 * activity_score
         elif expected == "trot":
-            gait_match_score = 0.5 + 0.5 * (diag_sync - lateral_sync)
+            pattern_score = 0.5 + 0.5 * (diag_sync - lateral_sync)
+            gait_match_score = 0.7 * pattern_score + 0.3 * activity_score
         elif expected == "pace":
-            gait_match_score = 0.5 + 0.5 * (lateral_sync - diag_sync)
+            pattern_score = 0.5 + 0.5 * (lateral_sync - diag_sync)
+            gait_match_score = 0.7 * pattern_score + 0.3 * activity_score
         elif expected in {"stand", ""}:
             gait_match_score = 0.5 + 0.5 * confidence
         else:
             gait_match_score = 0.5
         gait_match_score = float(np.clip(gait_match_score, 0.0, 1.0))
+        if expected in {"walk", "trot", "pace"} and predicted_gait == "stand":
+            gait_match_score = min(gait_match_score, 0.2)
         if expected and predicted_gait == expected:
             gait_match_score = max(gait_match_score, float(np.clip(0.75 + 0.25 * confidence, 0.0, 1.0)))
 
